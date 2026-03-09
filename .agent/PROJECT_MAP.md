@@ -1,0 +1,162 @@
+# PROJECT_MAP.md — Solvus Protocol Module Registry
+> Source of truth cho cấu trúc codebase. Agent phải đọc trước khi tạo hoặc sửa file.
+> Last updated: 2026-03-09
+
+---
+
+## 📁 Cấu trúc thư mục
+
+```
+solvus/
+├── .agent/                          ← Agent docs (file này đang ở đây)
+│   ├── AGENT_RULES.md
+│   ├── INVARIANTS.md
+│   ├── PROJECT_MAP.md
+│   ├── STACK.md
+│   ├── GRAVEYARD.md
+│   ├── PHASE0_GATE.md
+│   └── SESSION_LOG.md
+│
+├── src/
+│   ├── shared/
+│   │   └── utils.ts                 ← Crypto primitives (shared by all)
+│   ├── identity/
+│   │   └── nullifier_secret.ts      ← Nullifier secret generation
+│   ├── relayer/
+│   │   ├── types.ts                 ← RelayerResponse interface
+│   │   └── index.ts                 ← Xverse API + relayer signing
+│   ├── client/
+│   │   └── user_sig.ts              ← User ECDSA signature
+│   ├── prover/
+│   │   └── inputs.ts                ← ProverInputs assembler [ASYNC]
+│   └── calldata_helper.ts           ← Encoding, Poseidon, threshold map
+│
+├── circuits/
+│   └── src/main.nr                  ← Noir ZK circuit
+│
+├── cairo/
+│   └── contract.cairo               ← Cairo contract
+│
+└── phase0/
+    ├── xverse_format.ts             ← B#1, B#2 verification
+    └── poseidon_verify.ts           ← B#7 verification
+```
+
+---
+
+## 📦 Module Registry
+
+| Module | File | Responsibility | Exports | Consumers | Risk Level |
+|---|---|---|---|---|---|
+| **SharedUtils** | `src/shared/utils.ts` | Crypto primitives dùng chung | `BN254_PRIME`, `u64ToBigEndian()`, `toHex64()`, `toFieldHex()`, `stripRecoveryByte()` | Tất cả modules | 🔴 CRITICAL |
+| **NullifierSecret** | `src/identity/nullifier_secret.ts` | Generate nullifier secret từ BTC sig | `computeNullifierSecret()` | `prover/inputs.ts` | 🔴 CRITICAL |
+| **RelayerTypes** | `src/relayer/types.ts` | Type definitions cho relayer | `RelayerResponse` interface | `relayer/index.ts`, `prover/inputs.ts` | 🟠 HIGH |
+| **RelayerIndex** | `src/relayer/index.ts` | Fetch Xverse API + sign payload | `fetchRelayerData()` | Client orchestrator | 🟠 HIGH |
+| **UserSig** | `src/client/user_sig.ts` | Build user ECDSA message + sign | `buildUserSig()` | Client orchestrator | 🟠 HIGH |
+| **CalldataHelper** | `src/calldata_helper.ts` | Encoding + Poseidon + threshold | `computeNullifierHash()`, `getThresholdForBadge()`, `felt252ToU8Array32()`, `splitTo128BitFields()`, `runPhase0Tests()` | `prover/inputs.ts`, phase0 scripts | 🔴 CRITICAL |
+| **ProverInputs** | `src/prover/inputs.ts` | Assemble 15 prover fields | `buildProverInputs()` [ASYNC], `ProverInputParams` interface | Client orchestrator | 🔴 CRITICAL |
+| **NoirCircuit** | `circuits/src/main.nr` | ZK proof generation | `main()` + 3 helpers | Noir prover | 🔴 CRITICAL |
+| **CairoContract** | `cairo/contract.cairo` | On-chain verification | `issue_badge()`, `is_badge_valid()` | DeFi protocols | 🔴 CRITICAL |
+| **Phase0Xverse** | `phase0/xverse_format.ts` | B#1, B#2 gate scripts | `verifyXverseMessageFormat()` | Phase 0 only | 🟡 MEDIUM |
+| **Phase0Poseidon** | `phase0/poseidon_verify.ts` | B#7 gate script | `verifyPoseidonCompatibility()` | Phase 0 only | 🔴 CRITICAL |
+
+---
+
+## 🔗 Dependency Graph
+
+```
+Client Orchestrator (chưa có file — cần tạo)
+    │
+    ├──► computeNullifierSecret()   [identity/nullifier_secret.ts]
+    │         └──► stripRecoveryByte(), BN254_PRIME  [shared/utils.ts]
+    │
+    ├──► buildUserSig()             [client/user_sig.ts]
+    │         └──► toHex64(), stripRecoveryByte()    [shared/utils.ts]
+    │
+    ├──► fetchRelayerData()         [relayer/index.ts]
+    │         └──► u64ToBigEndian()                  [shared/utils.ts]
+    │         └──► RelayerResponse                   [relayer/types.ts]
+    │
+    └──► buildProverInputs() [ASYNC] [prover/inputs.ts]
+              └──► computeNullifierHash()            [calldata_helper.ts]
+              │         └──► splitTo128BitFields()   [calldata_helper.ts]
+              │         └──► getPoseidon() singleton  [calldata_helper.ts]
+              └──► getThresholdForBadge()            [calldata_helper.ts]
+              └──► felt252ToU8Array32()              [calldata_helper.ts]
+              └──► toFieldHex()                      [shared/utils.ts]
+              └──► RelayerResponse                   [relayer/types.ts]
+
+Noir Circuit [circuits/src/main.nr]
+    ├── split_to_128bit_fields()  ← MUST mirror splitTo128BitFields() TS
+    ├── u64_to_be_bytes()         ← MUST mirror u64ToBigEndian() TS
+    ├── bytes_to_hex64()          ← no TS equivalent, circuit-only
+    └── main()                    ← 4 steps verification
+
+Cairo Contract [cairo/contract.cairo]
+    ├── serialize_felt_to_u8_32() ← MUST mirror felt252ToU8Array32() TS
+    ├── get_expected_constraints() ← SOURCE OF TRUTH, TS mirrors this
+    ├── issue_badge()              ← 9 assertions
+    └── is_badge_valid()           ← 3-condition check
+```
+
+---
+
+## ⚡ High-Risk Coupling Points
+
+> Đây là những điểm mà thay đổi ở một chỗ BẮT BUỘC phải update chỗ kia.
+
+### COUPLING-01: Threshold Map (TypeScript ↔ Cairo)
+- **Cairo source:** `get_expected_constraints(badge_type, tier) → (u64, bool)`
+- **TS mirror:** `getThresholdForBadge(badgeType, tier) → number`
+- **Khi thêm badge/tier:** Update CẢ HAI file cùng lúc trong cùng session.
+
+### COUPLING-02: Poseidon Hash (TypeScript ↔ Noir)
+- **TS:** `poseidon([secret, x_hi, x_lo, badge_type])` via circomlibjs
+- **Noir:** `hash_4([secret, x_hi, x_lo, badge_type])`
+- **Gate:** B#7 phải pass trước khi trust bất kỳ nullifier nào.
+
+### COUPLING-03: pubkey_x Split (TypeScript ↔ Noir)
+- **TS:** `splitTo128BitFields()` in calldata_helper.ts
+- **Noir:** `split_to_128bit_fields()` in main.nr
+- **Gate:** B#3 round-trip test.
+
+### COUPLING-04: felt252 ↔ [u8;32] (TypeScript ↔ Cairo)
+- **TS:** `felt252ToU8Array32()` in calldata_helper.ts
+- **Cairo:** `serialize_felt_to_u8_32()` in contract.cairo
+- **Cả hai:** Big-Endian, left-padded zeros.
+
+### COUPLING-05: Message Format (TypeScript ↔ Noir)
+- **TS buildUserSig:** `toHex64(addr) + toHex64(nonce)` → 128 ASCII chars
+- **Noir Step 1:** reconstruct từ `bytes_to_hex64(addr.to_be_bytes(32))`
+- **Gate:** B#3 leading-zero address test.
+
+---
+
+## 📊 Prover Input Fields (15 fields — Rule 3: Zero ellipsis)
+
+| Field | Type (TS) | Type (Noir) | Source | Private? |
+|---|---|---|---|---|
+| `pubkey_x` | `number[32]` | `[u8; 32]` | BTC wallet | ✅ PRIVATE |
+| `pubkey_y` | `number[32]` | `[u8; 32]` | BTC wallet | ✅ PRIVATE |
+| `user_sig` | `number[64]` | `[u8; 64]` | `buildUserSig()` | ✅ PRIVATE |
+| `relayer_sig` | `number[64]` | `[u8; 64]` | `relayerResponse.relayer_sig` | ✅ PRIVATE |
+| `btc_data` | `number` | `u64` | `relayerResponse.btc_data` | ✅ PRIVATE |
+| `nullifier_secret` | `"0x..." string` | `Field` | `computeNullifierSecret()` | ✅ PRIVATE |
+| `starknet_address` | `"0x..." Field hex` | `pub Field` | `toFieldHex(BigInt(addr))` | 🌐 PUBLIC |
+| `nonce` | `"0x..." Field hex` | `pub Field` | `toFieldHex(nonce)` | 🌐 PUBLIC |
+| `badge_type` | `1 \| 2` | `pub u8` | param | 🌐 PUBLIC |
+| `relayer_pubkey_x` | `number[32]` | `pub [u8; 32]` | `felt252ToU8Array32(relayerPubkeyXFelt)` | 🌐 PUBLIC |
+| `relayer_pubkey_y` | `number[32]` | `pub [u8; 32]` | `felt252ToU8Array32(relayerPubkeyYFelt)` | 🌐 PUBLIC |
+| `threshold` | `number` | `pub u64` | `getThresholdForBadge(bt, tier)` | 🌐 PUBLIC |
+| `is_upper_bound` | `false` | `pub bool` | hardcoded `false` (V1) | 🌐 PUBLIC |
+| `timestamp` | `number` | `pub u64` | `relayerResponse.timestamp` ⚠️ | 🌐 PUBLIC |
+| `nullifier_hash` | `"0x..." Field hex` | `pub Field` | `await computeNullifierHash(...)` | 🌐 PUBLIC |
+
+---
+
+## 🚧 Chưa có file — Cần tạo
+
+| File | Mô tả | Blocked by |
+|---|---|---|
+| `src/orchestrator.ts` | Client flow coordinator | Done |
+| `phase0/poseidon_verify.ts` | B#7 cần điền `NOIR_EXPECTED` | Chạy `nargo test` trước |

@@ -1,0 +1,22 @@
+{
+  "name": "solvus-protocol",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "phase0:xverse": "ts-node phase0/xverse_format.ts",
+    "phase0:poseidon": "ts-node phase0/poseidon_verify.ts",
+    "phase0:calldata": "ts-node -e \"require('./src/calldata_helper').runPhase0Tests()\"",
+    "typecheck": "tsc --noEmit",
+    "lint:crypto": "grep -rn 'allocUnsafe\\|Date\\.now()' src/prover/ src/client/ --include='*.ts'"
+  },
+  "dependencies": {
+    "@noble/curves": "^1.4.0",
+    "@noble/hashes": "^1.4.0",
+    "circomlibjs": "0.1.7"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "ts-node": "^10.9.0",
+    "@types/node": "^20.0.0"
+  }
+}
