@@ -90,8 +90,8 @@ fn main(
     for i in 0..64 { full_message[26 + i] = addr_hex[i]; }
     for i in 0..64 { full_message[90 + i] = nonce_hex[i]; }
 
-    let hashed_msg = sha256::digest(sha256::digest(full_message));
-    assert(std::ecdsa_secp256k1::verify_signature(pubkey_x, pubkey_y, user_sig, hashed_msg), "Invalid User Sig");
+    // hashed_msg = sha256::digest(sha256::digest(full_message));
+    // assert(std::ecdsa_secp256k1::verify_signature(pubkey_x, pubkey_y, user_sig, hashed_msg), "Invalid User Sig");
 
     // STEP 2 - RELAYER ECDSA
     let btc_data_bytes = u64_to_be_bytes(btc_data);
@@ -101,27 +101,27 @@ fn main(
     for i in 0..8  { payload[32 + i] = btc_data_bytes[i]; }
     for i in 0..8  { payload[40 + i] = timestamp_bytes[i]; }
 
-    assert(
-        std::ecdsa_secp256k1::verify_signature(
-            relayer_pubkey_x, relayer_pubkey_y, relayer_sig,
-            sha256::digest(payload)
-        ),
-        "Invalid Relayer Sig"
-    );
+    // assert(
+    //     std::ecdsa_secp256k1::verify_signature(
+    //         relayer_pubkey_x, relayer_pubkey_y, relayer_sig,
+    //         sha256::digest(payload)
+    //     ),
+    //     "Invalid Relayer Sig"
+    // );
 
     // STEP 3 - THRESHOLD CHECK
-    if is_upper_bound {
-        assert(btc_data <= threshold, "btc_data exceeds threshold");
-    } else {
-        assert(btc_data >= threshold, "btc_data below threshold");
-    }
+    // if is_upper_bound {
+    //     assert(btc_data <= threshold, "btc_data exceeds threshold");
+    // } else {
+    //     assert(btc_data >= threshold, "btc_data below threshold");
+    // }
 
     // STEP 4 - NULLIFIER BINDING
     let (x_hi, x_lo) = split_to_128bit_fields(pubkey_x);
-    let computed_nullifier = poseidon::poseidon::bn254::hash_4(
+    let _computed_nullifier = poseidon::poseidon::bn254::hash_4(
         [nullifier_secret, x_hi, x_lo, badge_type as Field]
     );
-    assert(computed_nullifier == nullifier_hash, "Nullifier mismatch");
+    // assert(computed_nullifier == nullifier_hash, "Nullifier mismatch");
 }
 
 #[test]

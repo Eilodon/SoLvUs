@@ -64,12 +64,18 @@ export function getThresholdForBadge(badgeType: number, tier: number): number {
 /**
  * Lazy singleton for Poseidon builder.
  */
-let _poseidon: any = null;
-async function getPoseidon(): Promise<any> {
+interface Poseidon {
+  (inputs: bigint[]): bigint;
+  F: {
+    toObject(hash: any): bigint;
+  };
+}
+let _poseidon: Poseidon | null = null;
+async function getPoseidon(): Promise<Poseidon> {
   if (!_poseidon) {
     _poseidon = await buildPoseidon();
   }
-  return _poseidon;
+  return _poseidon!;
 }
 
 /**
@@ -84,7 +90,7 @@ export async function computeNullifierHash(
   if (pubkeyXBytes.length !== 32) {
     throw new Error(`Expected 32 bytes for pubkeyX, got ${pubkeyXBytes.length}`);
   }
-  if (badgeType !== 1 && badgeType !== 2) {
+  if (badgeType !== 1 && badgeType !== 2 && badgeType !== 3) {
     throw new Error(`Invalid badgeType=${badgeType}`);
   }
 

@@ -37,9 +37,13 @@ solvus/
 ├── cairo/
 │   └── contract.cairo               ← Cairo contract
 │
+├── ui/
+│   ├── src/
+│   │   ├── App.tsx                  ← Main Demo Interface
+│   │   ├── VesuMock.tsx             ← DeFi Integration Mock
+│   │   └── solvus_config.ts         ← UI-specific config
+│   └── .env                         ← UI Environment variables
 └── phase0/
-    ├── xverse_format.ts             ← B#1, B#2 verification
-    └── poseidon_verify.ts           ← B#7 verification
 ```
 
 ---
@@ -54,11 +58,22 @@ solvus/
 | **RelayerIndex** | `src/relayer/index.ts` | Fetch Xverse API + sign payload | `fetchRelayerData()` | Client orchestrator | 🟠 HIGH |
 | **UserSig** | `src/client/user_sig.ts` | Build user ECDSA message + sign | `buildUserSig()` | Client orchestrator | 🟠 HIGH |
 | **CalldataHelper** | `src/calldata_helper.ts` | Encoding + Poseidon + threshold | `computeNullifierHash()`, `getThresholdForBadge()`, `felt252ToU8Array32()`, `splitTo128BitFields()`, `runPhase0Tests()` | `prover/inputs.ts`, phase0 scripts | 🔴 CRITICAL |
-| **ProverInputs** | `src/prover/inputs.ts` | Assemble 15 prover fields | `buildProverInputs()` [ASYNC], `ProverInputParams` interface | Client orchestrator | 🔴 CRITICAL |
+| **Orchestrator** | `src/orchestrator.ts` | End-to-end flow coordinator | `issueBadge()` | UI/Client | 🔴 CRITICAL |
 | **NoirCircuit** | `circuits/src/main.nr` | ZK proof generation | `main()` + 3 helpers | Noir prover | 🔴 CRITICAL |
 | **CairoContract** | `cairo/contract.cairo` | On-chain verification | `issue_badge()`, `is_badge_valid()` | DeFi protocols | 🔴 CRITICAL |
+| **DeploymentInfo** | `cairo/deployment.json` | Persistent deployment metadata | JSON object | `src/config.ts` | 🟡 MEDIUM |
+| **AppConfig** | `src/config.ts` | Centralized constants/URLs | `CONTRACT_ADDRESS`, etc. | Whole App | 🟡 MEDIUM |
 | **Phase0Xverse** | `phase0/xverse_format.ts` | B#1, B#2 gate scripts | `verifyXverseMessageFormat()` | Phase 0 only | 🟡 MEDIUM |
 | **Phase0Poseidon** | `phase0/poseidon_verify.ts` | B#7 gate script | `verifyPoseidonCompatibility()` | Phase 0 only | 🔴 CRITICAL |
+| **ProverServer** | `src/server/prover_server.ts` | Refined proving server | HTTP Server | Client/UI | 🟠 HIGH |
+| **DeployScript** | `scripts/deploy.ts` | Starknet contract deployer | Deployment Logic | DevOps | 🟡 MEDIUM |
+| **VesuIntegration** | `src/integrations/vesu_demo.ts` | Vesu lending integration demo | `checkBorrowingPower` | Demo/Judges | 🔵 LOW |
+| **DemoUI** | `ui/src/App.tsx` | Main Demo Interface | React Component | User | 🟡 MEDIUM |
+| **VesuMock** | `ui/src/VesuMock.tsx` | DeFi Integration Mock | React Component | Demo UI | 🔵 LOW |
+| **UIConfig** | `ui/src/solvus_config.ts` | UI-specific constants | `PROVER_SERVER_URL` | UI | 🔵 LOW |
+| **PregenerateScript** | `src/demo/pregenerate.ts` | Demo proof caching script | none | DevOps/Demo | 🟡 MEDIUM |
+| **DemoCachedProof** | `ui/public/demo/cached_proof.json` | Pre-generated proof for demo | JSON | Demo UI | 🔵 LOW |
+| **SubmissionDoc** | `SUBMISSION.md` | Hackathon submission content | none | Docs | 🔵 LOW |
 
 ---
 

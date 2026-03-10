@@ -7,16 +7,27 @@
     "phase0:poseidon": "ts-node phase0/poseidon_verify.ts",
     "phase0:calldata": "ts-node -e \"require('./src/calldata_helper').runPhase0Tests()\"",
     "typecheck": "tsc --noEmit",
-    "lint:crypto": "grep -rn 'allocUnsafe\\|Date\\.now()' src/prover/ src/client/ --include='*.ts'"
+    "lint:crypto": "grep -rn 'allocUnsafe\\|Date\\.now()' src/prover/ src/client/ --include='*.ts'",
+    "server": "ts-node src/server/prover_server.ts"
   },
   "dependencies": {
     "@noble/curves": "^1.4.0",
     "@noble/hashes": "^1.4.0",
-    "circomlibjs": "0.1.7"
+    "@types/body-parser": "^1.19.6",
+    "@types/cors": "^2.8.19",
+    "@types/dotenv": "^6.1.1",
+    "@types/express": "^5.0.6",
+    "body-parser": "^2.2.2",
+    "circomlibjs": "0.1.7",
+    "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "starknet": "^7.1.0"
   },
   "devDependencies": {
-    "typescript": "^5.4.0",
+    "@aztec/bb.js": "^4.0.4",
+    "@types/node": "^20.0.0",
     "ts-node": "^10.9.0",
-    "@types/node": "^20.0.0"
+    "typescript": "^5.4.0"
   }
 }

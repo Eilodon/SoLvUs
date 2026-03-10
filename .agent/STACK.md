@@ -24,6 +24,8 @@
 | `@noble/curves` | latest stable | `^` OK | secp256k1 ECDSA, BN254 mod | `shared/utils.ts`, `relayer/index.ts` |
 | `@noble/hashes` | latest stable | `^` OK | SHA-512, SHA-256 | `shared/utils.ts`, `relayer/index.ts` |
 | `circomlibjs` | **`0.1.7` EXACT** | ❌ NO `^` or `~` | Poseidon BN254 | `calldata_helper.ts` |
+| `express` | `^4.18.0` | `^` OK | Prover Server API | `src/prover/server.ts` |
+| `starknet` | `^6.11.0` | `^` OK | Starknet SDK | `scripts/deploy.ts`, `demo-ui/` |
 
 > ⚠️ `circomlibjs@0.1.7` phải pin EXACT. Khác version = Poseidon output khác = proof luôn fail.
 > Lý do: Poseidon parameters (MDS matrix, round constants) thay đổi giữa versions.

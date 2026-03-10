@@ -1,0 +1,10 @@
+{
+  "network": "sepolia",
+  "contract_address": "0x0000000000000000000000000000000000000000",
+  "class_hash": "",
+  "deploy_tx": "",
+  "deployed_at": "",
+  "garaga_verifier": "",
+  "relayer_pubkey_x": "",
+  "relayer_pubkey_y": ""
+}

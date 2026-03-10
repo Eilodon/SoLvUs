@@ -17,7 +17,7 @@ export interface ProverInputParams {
   nullifierSecretHex: string;    // "0x..." from computeNullifierSecret()
   starknetAddress: string;       // "0x..." Starknet address
   nonce: bigint;
-  badgeType: 1 | 2;
+  badgeType: 1 | 2 | 3;
   tier: number;
   relayerPubkeyXFelt: bigint;    // felt252 from contract storage
   relayerPubkeyYFelt: bigint;
