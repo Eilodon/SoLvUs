@@ -127,7 +127,7 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen w-full flex flex-col items-center bg-slate-950 text-slate-100 p-4 md:p-8">
+    <div className="min-h-screen w-full flex flex-col items-center bg-black text-slate-100 p-4 md:p-8">
       {/* Header */}
       <header className="w-full max-w-4xl flex justify-between items-center mb-12">
         <div className="flex items-center gap-2">
@@ -136,7 +136,7 @@ function App() {
           </div>
           <div>
             <h1 className="text-xl font-black tracking-tight">SOLVUS</h1>
-            <p className="text-[10px] text-slate-500 font-mono">PROTOCOL V1 | SEPOLIA</p>
+            <p className="text-[10px] text-slate-400 font-mono">PROTOCOL V1 | SEPOLIA</p>
           </div>
         </div>
         <div className="flex gap-3">
@@ -148,7 +148,7 @@ function App() {
       <main className="w-full max-w-4xl space-y-8">
         
         {/* Section 1: Connect Wallets */}
-        <section className="glass rounded-2xl p-6">
+        <section className="glass rounded-2xl p-6 border-white/5">
           <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-widest mb-4">Section 1 — Connect Wallets</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <button 
@@ -173,7 +173,7 @@ function App() {
         </section>
 
         {/* Section 2: Select Badge */}
-        <section className="glass rounded-2xl p-6">
+        <section className="glass rounded-2xl p-6 border-white/5">
           <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-widest mb-4">Section 2 — Select Badge</h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             {/* Whale Badge */}
@@ -248,7 +248,7 @@ function App() {
         </section>
 
         {/* Section 3: Prove & Mint */}
-        <section className="glass rounded-2xl p-6 text-center">
+        <section className="glass rounded-2xl p-6 border-white/5 text-center">
           <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-widest mb-6 text-left">Section 3 — Prove & Mint</h2>
           
           <button
@@ -296,7 +296,7 @@ function App() {
         </section>
 
         {/* Section 4: Verify Badge */}
-        <section className="glass rounded-2xl p-6">
+        <section className="glass rounded-2xl p-6 border-white/5">
           <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-widest mb-4">Section 4 — Verify Badge</h2>
           <div className="space-y-4">
             <div className="flex gap-2">
@@ -305,11 +305,11 @@ function App() {
                 placeholder="Enter Starknet Address" 
                 value={starknetAddress || ''}
                 readOnly
-                className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-sm font-mono focus:outline-none focus:border-blue-500"
+                className="flex-1 bg-white/5 border border-white/10 rounded-lg px-4 py-2 text-sm font-mono focus:outline-none focus:border-blue-500/50"
               />
               <button 
                 onClick={checkBadges}
-                className="bg-slate-800 hover:bg-slate-700 px-4 py-2 rounded-lg text-sm font-bold border border-slate-700"
+                className="bg-white/10 hover:bg-white/20 px-4 py-2 rounded-lg text-sm font-bold border border-white/10"
               >
                 Check Badges
               </button>

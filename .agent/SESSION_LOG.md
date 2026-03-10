@@ -399,3 +399,13 @@
 - **Invariants touched:** None
 - **Open issues:** Account deploy failed (error 40: Contract error - class hash may not exist on Sepolia); Contract deploy needs declare first
 - **Phase 0 status:** Deployment scripts ready, blocked by account class hash availability
+
+---
+
+## [2026-03-10] — Final Starknet Deployment (Sepolia)
+- **Modified:** cairo/contract.cairo, cairo/scripts/deploy.ts, cairo/scripts/deploy_account.ts, cairo/Scarb.toml
+- **Structural change:** Added constructor to SolvusBadge contract, updated Scarb version to 2.8.4
+- **Dep change:** Aligned Scarb-starknet to `2.8.4` (Internal toolchain compatibility)
+- **Invariants touched:** INV-13, INV-14, Safety-01
+- **Status:** 🏆 Contract DEPLOYED at `0x7735...`. Class Hash `0x6dcc...` verified.
+- **Open issues:** none

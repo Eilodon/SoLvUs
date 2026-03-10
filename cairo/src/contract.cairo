@@ -1,12 +1,13 @@
 #[starknet::contract]
 mod SolvusBadge {
     use starknet::ContractAddress;
-    use array::ArrayTrait;
-    use traits::Into;
-    use traits::TryInto;
-    use option::OptionTrait;
+    use starknet::storage::{Map, StoragePointerReadAccess, StoragePointerWriteAccess, StoragePathEntry};
+    use core::array::ArrayTrait;
+    use core::traits::Into;
+    use core::traits::TryInto;
+    use core::option::OptionTrait;
 
-    // --- PHẦN 1: TYPES ---
+    // --- PHẦN 1: TYPES (v0.1.1) ---
 
     #[derive(Drop, Serde, Copy, starknet::Store)]
     struct PublicInputs {
@@ -37,18 +38,16 @@ mod SolvusBadge {
 
     #[storage]
     struct Storage {
-        badges: LegacyMap<(ContractAddress, u8), BitcoinSolvencyBadge>,
-        nonces: LegacyMap<ContractAddress, felt252>,
-        nullifier_registry: LegacyMap<(felt252, u8), NullifierEntry>,
+        badges: Map<(ContractAddress, u8), BitcoinSolvencyBadge>,
+        nonces: Map<ContractAddress, felt252>,
+        nullifier_registry: Map<(felt252, u8), NullifierEntry>,
         garaga_verifier: ContractAddress,
     }
 
     // --- PHẦN 3: HELPERS ---
 
-    /**
-     * get_expected_constraints: SOURCE OF TRUTH for threshold logic.
-     * Mirrors TypeScript's getThresholdForBadge().
-     */
+    // get_expected_constraints: SOURCE OF TRUTH for threshold logic.
+    // Mirrors TypeScript's getThresholdForBadge().
     fn get_expected_constraints(badge_type: u8, tier: u8) -> (u64, bool) {
         if badge_type == 1 { // Whale (satoshi)
             if tier == 1 { return (10_000_000, false); } // 0.1 BTC
@@ -64,7 +63,7 @@ mod SolvusBadge {
             if tier == 3 { return (30, false); }
         }
         
-        assert(false, 'Invalid badge_type or tier');
+        assert(false, 'Invalid badge type or tier');
         (0, false)
     }
 
@@ -75,6 +74,11 @@ mod SolvusBadge {
     #[starknet::interface]
     trait IGaragaVerifier<TContractState> {
         fn verify(self: @TContractState, proof: Array<felt252>, public_inputs: PublicInputs);
+    }
+
+    #[constructor]
+    fn constructor(ref self: ContractState, garaga_verifier: ContractAddress) {
+        self.garaga_verifier.write(garaga_verifier);
     }
 
     #[abi(embed_v0)]
