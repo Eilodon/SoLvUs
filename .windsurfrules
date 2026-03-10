@@ -1,0 +1,144 @@
+# Solvus Protocol - Windsurf Rules
+# ZK Cryptography Project - Strict Enforcement
+
+## IDENTITY ABSOLUTE - This is a ZK Cryptography Project
+
+Solvus is NOT a CRUD app. One byte error in hash input = silent proof failure, no clear error message.
+NEVER "optimize", "creatively refactor", or "simplify" any cryptographic primitive without reading INVARIANTS.md first.
+
+---
+
+## MANDATORY 3-STEP PROTOCOL
+
+### Step 1 - Locate (REQUIRED before any task)
+- [ ] Read PROJECT_MAP.md → identify affected modules
+- [ ] Read INVARIANTS.md → check task against invariants
+- [ ] Read GRAVEYARD.md → ensure not recreating deleted files/patterns
+- [ ] List: files to touch, downstream consumers, affected imports
+
+### Step 2 - Declare Plan (REQUIRED before coding)
+```
+I will modify: [file list]
+Downstream files affected: [list]
+Invariants involved: [list from INVARIANTS.md]
+I will NOT change: [what stays unchanged]
+```
+
+### Step 3 - After Completion (REQUIRED)
+- [ ] Update PROJECT_MAP.md if adding/removing/renaming files or exports
+- [ ] Update STACK.md if adding/changing dependencies
+- [ ] Append to SESSION_LOG.md (3 lines: changed / impact / open issues)
+- [ ] Run consistency checks (see below)
+
+---
+
+## HARD RULES - VIOLATION = STOP AND REPORT
+
+### R1 - No file creation without checking PROJECT_MAP.md
+File already exists but recreate = conflict, broken import paths, duplicate logic.
+→ Always grep PROJECT_MAP.md before `touch` any new file.
+
+### R2 - No import path changes without updating all consumers
+Check "Consumers" column in PROJECT_MAP.md. Changing 1 file = check all downstream consumers.
+
+### R3 - No cryptographic primitive changes without test vectors
+Applies to: hash functions, signature format, field encoding, byte order.
+→ Must have concrete input/output test PASS before merge.
+
+### R4 - NO `allocUnsafe`, `|`, `&` (bitwise) in any context
+- TypeScript: `Buffer.alloc` NOT `allocUnsafe`, `&&` NOT `&`, `||` NOT `|`
+- Cairo: `&&` NOT `&`, `||` NOT `|`
+→ Rule 4 from PRD. Grep all files after writing.
+
+### R5 - NO hardcoded cryptographic values by retyping
+Use constants defined in `src/shared/utils.ts`. NEVER recalculate `BN254_PRIME`.
+
+### R6 - `pubkey_x` and `pubkey_y` (BTC) are ABSOLUTELY PRIVATE
+NEVER pass to Cairo contract. NEVER log. NEVER expose via public interface.
+Bitcoin address leaks on-chain if violated.
+
+### R7 - `buildProverInputs()` must be `async`, all callers must `await`
+`computeNullifierHash()` is async (Poseidon lazy init). Missing `await` = Promise object instead of bigint = silent proof failure.
+
+### R8 - `timestamp` ONLY from `relayerResponse.timestamp`
+NEVER use `Date.now()`. NEVER use `new Date()`. Only `relayerResponse.timestamp`.
+Wrong source = Cairo freshness check fail (3600s window).
+
+### R9 - Poseidon input order is IMMUTABLE: `[secret, x_hi, x_lo, badge_type]`
+TypeScript and Noir must match 1-to-1. Changing order = nullifier mismatch = proof fail.
+Check INVARIANTS.md Poseidon section before touching anything related.
+
+### R10 - `circomlibjs` must be pinned EXACT version `0.1.7`
+NO `^0.1.7` or `~0.1.7`. Different version = different Poseidon output = proof fail.
+
+---
+
+## CONSISTENCY CHECK - Run after every task
+
+```bash
+# 1. Check import paths valid
+npx tsc --noEmit
+
+# 2. Check boolean operator leaks
+grep -rn " | " src/ --include="*.ts" | grep -v "||"
+grep -rn " & " src/ --include="*.ts" | grep -v "&&"
+
+# 3. Check allocUnsafe
+grep -rn "allocUnsafe" src/ --include="*.ts"
+
+# 4. Check Date.now() in wrong context
+grep -rn "Date.now()" src/prover/ src/client/ --include="*.ts"
+
+# 5. Check missing await for buildProverInputs / computeNullifierHash
+grep -rn "buildProverInputs\|computeNullifierHash" src/ --include="*.ts" | grep -v "await"
+
+# 6. Noir (if circuit modified)
+cd circuits && nargo check
+```
+
+If any check fails → FIX before closing session. NO open issues left.
+
+---
+
+## MENTAL MODEL TO REMEMBER
+
+```
+Solvus = 3 layers must be ABSOLUTELY synchronized:
+
+  TypeScript (Client)
+       ↕  must mirror exactly
+  Noir Circuit
+       ↕  must mirror exactly
+  Cairo Contract
+
+  Any divergence = ZK proof fail.
+  ZK proof fail usually has NO descriptive error message.
+  Debug ZK fail = extremely time consuming.
+  Prevention >> cure.
+```
+
+---
+
+## DOCUMENTATION NAVIGATION
+
+| Need to know | Read this file |
+|---|---|
+| File purposes and locations | `PROJECT_MAP.md` |
+| Tech stack, package versions | `STACK.md` |
+| Cryptographic invariants | `INVARIANTS.md` |
+| Deleted files/patterns | `GRAVEYARD.md` |
+| Previous session changes | `SESSION_LOG.md` |
+| Phase 0 status | `PHASE0_GATE.md` |
+
+---
+
+## MAINTENANCE NOTES
+
+### MAINT-01 - Adding Badge Type
+⚠️ NEVER modify `circuits/main.nr` when adding badge type.
+Noir payload structure is immutable (INV-09).
+Only update Cairo and TypeScript threshold maps.
+
+---
+
+Last updated: 2026-03-10
