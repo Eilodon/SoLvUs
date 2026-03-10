@@ -356,12 +356,16 @@
   4. Puppeteer browser automation - module load fails
   5. Manual VK parsing - format too complex, incorrect values
   6. bb.js VK extraction - same WASM/ABI issues
-- **Root cause:** System ABI/glibc incompatibility with garaga WASM/bindings across all platforms (Python, Node.js, Browser)
-- **Phase 0 status:** BLOCKED - all automation paths exhausted
+- **Root cause:** System thiếu `libgmp-dev` - GMP library cần cho `fastecdsa`/`garaga_rs`
+- **Attempted:** Cài `libgmp-dev`, `libgmp3-dev`, reinstall garaga Python 3.10
+- **Result:** Vẫn ImportError `garaga_rs` - có thể do ABI incompatibility khác
+- **Solution:** GitHub Actions workflow (`.github/workflows/generate-verifier.yml`) để generate verifier trên Ubuntu 22.04 clean environment
+- **Next:** Trigger workflow từ GitHub Actions tab → auto-generate và commit verifier files
+- **Phase 0 status:** BLOCKED → CI/CD solution implemented
 
 ---
 
-## [2026-03-10] — Phase 2: Cairo Contract Purge
+## [2026-03-10] — GitHub Actions Verifier Generation
 - **Modified:** cairo/contract.cairo, circuits/src/main.nr, src/orchestrator.ts, src/prover/inputs.ts, src/demo/pregenerate.ts, .agent/PROJECT_MAP.md
 - **Structural change:** Removed `relayer_pubkey` from Cairo Storage/PublicInputs, deleted `serialize_felt_to_u8_32` helper.
 - **Dep change:** none
