@@ -378,3 +378,14 @@
 - **Invariants touched:** INV-01, INV-05, INV-07, INV-09, INV-12
 - **Open issues:** Final real-world testing on Starknet Sepolia.
 - **Phase 0 status:** Multi-layer alignment (Noir -> Cairo -> TS) restored after protocol simplification.
+
+
+---
+
+## [2026-03-10] — Copy Fresh Verifier Files from Downloads
+- **Modified:** cairo/src/solvus_verifier/ (copied fresh files from Downloads/solvus_verifier)
+- **Structural change:** Deleted stale files, copied new honk_verifier*.cairo, lib.cairo, Scarb.toml
+- **Dep change:** garaga dependency fixed: path → git
+- **Invariants touched:** None (file operations only)
+- **Open issues:** Need verify public_inputs_size in new constants file
+- **Phase 0 status:** Verifier files refreshed
