@@ -71,7 +71,7 @@ solvus/
 | **AppConfig** | `src/config.ts` | Centralized constants/URLs | `CONTRACT_ADDRESS`, etc. | Whole App | 🟡 MEDIUM |
 | **Phase0Xverse** | `phase0/xverse_format.ts` | B#1, B#2 gate scripts | `verifyXverseMessageFormat()` | Phase 0 only | 🟡 MEDIUM |
 | **Phase0Poseidon** | `phase0/poseidon_verify.ts` | B#7 gate script | `verifyPoseidonCompatibility()` | Phase 0 only | 🔴 CRITICAL |
-| **ProverServer** | `src/server/prover_server.ts` | Refined proving server | HTTP Server | Client/UI | 🟠 HIGH |
+| **ProverServer** | `src/server/prover_server.ts` | Proving server + /sign endpoint | HTTP Server | Client/UI | 🟠 HIGH |
 | **DeployScript** | `scripts/deploy.ts` | Starknet contract deployer | Deployment Logic | DevOps | 🟡 MEDIUM |
 | **VesuIntegration** | `src/integrations/vesu_demo.ts` | Vesu lending integration demo | `checkBorrowingPower` | Demo/Judges | 🔵 LOW |
 | **DemoUI** | `ui/src/App.tsx` | Main Demo Interface | React Component | User | 🟡 MEDIUM |
