@@ -5,7 +5,10 @@ import * as dotenv from 'dotenv';
 
 dotenv.config();
 
-const provider = new RpcProvider({ nodeUrl: process.env.STARKNET_RPC_URL || 'https://starknet-sepolia.public.blastapi.io' });
+const provider = new RpcProvider({ 
+    nodeUrl: process.env.STARKNET_RPC_URL || 'https://starknet-sepolia.g.alchemy.com/starknet/version/rpc/v0_7/oD44xOXHjcJW3bAkmHW9C',
+    specVersion: '0.7'
+});
 
 async function deploy() {
     console.log('🚀 Starting Solvus Deployment on Sepolia...');
@@ -52,23 +55,26 @@ async function deploy() {
     const garagaVerifier = process.env.GARAGA_VERIFIER_ADDRESS || '0x0000000000000000000000000000000000000000000000000000000000000000'; 
     
     console.log('⏳ Deploying contract...');
-    const { transaction_hash, contract_address } = await account.deployContract({
+    const deployResponse = await account.deployContract({
         classHash: declareResponse.class_hash,
         constructorCalldata: CallData.compile([
             garagaVerifier,
             relayerPubkeyX,
             relayerPubkeyY
-        ])
+        ]),
+        salt: '0x1234'
     });
-
-    console.log('✅ Contract Address:', contract_address[0]);
+    const transaction_hash = deployResponse.transaction_hash;
+    const contract_address = deployResponse.contract_address;
+    
+    console.log('✅ Contract Address:', contract_address);
     console.log('⏳ Waiting for confirmation...');
     await provider.waitForTransaction(transaction_hash);
 
     // 5. Save deployment info
     const deployment = {
         network: 'sepolia',
-        contract_address: contract_address[0],
+        contract_address: contract_address,
         class_hash: declareResponse.class_hash,
         deploy_tx: transaction_hash,
         deployed_at: new Date().toISOString(),

@@ -389,3 +389,13 @@
 - **Invariants touched:** None (file operations only)
 - **Open issues:** Need verify public_inputs_size in new constants file
 - **Phase 0 status:** Verifier files refreshed
+
+---
+
+## [2026-03-10] — Starknet Account & Contract Deployment
+- **Modified:** `cairo/scripts/deploy_account.ts` (new), `cairo/scripts/deploy.ts` (fixed RPC version)
+- **Structural change:** Fixed RPC provider to use specVersion: '0.7' for Alchemy compatibility
+- **Dep change:** None
+- **Invariants touched:** None
+- **Open issues:** Account deploy failed (error 40: Contract error - class hash may not exist on Sepolia); Contract deploy needs declare first
+- **Phase 0 status:** Deployment scripts ready, blocked by account class hash availability
