@@ -409,3 +409,12 @@
 - **Invariants touched:** INV-13, INV-14, Safety-01
 - **Status:** 🏆 Contract DEPLOYED at `0x7735...`. Class Hash `0x6dcc...` verified.
 - **Open issues:** none
+
+---
+
+## [2026-03-11] — Final Hackathon Submission Polish
+- **Modified:** README.md, src/server/prover_server.ts, ui/.env, .agent/PROJECT_MAP.md
+- **Structural change:** none
+- **Dep change:** none
+- **Invariants touched:** INV-09, INV-10, INV-11 (Relayer payload & signing)
+- **Status:** 🏆 Submission READY. /sign endpoint verified. README synced.
