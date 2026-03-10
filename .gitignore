@@ -75,6 +75,23 @@ temp/
 # AI Agent files
 .agent/
 
+# Pyenv / Python version files
+.python-version
+.tool-versions
+
+# Test / temporary scripts
+garaga_browser.js
+gen_sol_verifier.js
+gen_vk_constants.js
+reconstruct_vk.py
+gen_full_help.txt
+
+# Backup / old verifier directories
+solvus_verifier_v*/
+my-garaga-venv/
+garaga310-venv/
+garaga-py*/
+
 # Build artifacts
 build/
 out/

@@ -16,8 +16,6 @@ async function pregenerate() {
     starknet_address: "0x00000000d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7",
     nonce: "0x1",
     user_sig: Array(64).fill(0),
-    relayer_pubkey_x: Array(32).fill(0),
-    relayer_pubkey_y: Array(32).fill(0),
     relayer_sig: Array(64).fill(0),
     badge_type: 1,
     tier: 1,

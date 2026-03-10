@@ -13,8 +13,6 @@ mod SolvusBadge {
         starknet_address: felt252,
         nonce: felt252,
         badge_type: u8,
-        relayer_pubkey_x: [u8; 32],
-        relayer_pubkey_y: [u8; 32],
         threshold: u64,
         is_upper_bound: bool,
         timestamp: u64,
@@ -43,43 +41,9 @@ mod SolvusBadge {
         nonces: LegacyMap<ContractAddress, felt252>,
         nullifier_registry: LegacyMap<(felt252, u8), NullifierEntry>,
         garaga_verifier: ContractAddress,
-        relayer_pubkey_x: felt252,
-        relayer_pubkey_y: felt252,
     }
 
     // --- PHẦN 3: HELPERS ---
-
-    /**
-     * Converts a felt252 to a 32-byte array (Big-Endian).
-     * Mirrors TypeScript's felt252ToU8Array32().
-     */
-    fn serialize_felt_to_u8_32(val: felt252) -> [u8; 32] {
-        let val_u256: u256 = val.into();
-        let mut hi: u128 = val_u256.high;
-        let mut lo: u128 = val_u256.low;
-        
-        let mut out: [u8; 32] = [0; 32];
-        
-        // Fill bytes[0..16] from hi (MSB first)
-        let mut i: usize = 15;
-        loop {
-            out[i] = (hi&0xff).try_into().unwrap();
-            hi = hi / 256;
-            if i == 0 { break; }
-            i -= 1;
-        };
-        
-        // Fill bytes[16..32] from lo (MSB first)
-        let mut j: usize = 31;
-        loop {
-            out[j] = (lo&0xff).try_into().unwrap();
-            lo = lo / 256;
-            if j == 16 { break; }
-            j -= 1;
-        };
-        
-        out
-    }
 
     /**
      * get_expected_constraints: SOURCE OF TRUTH for threshold logic.
@@ -149,9 +113,7 @@ mod SolvusBadge {
                 assert(current - public_inputs.timestamp <= 3600, 'Relayer signature expired');
             }
 
-            // Assert 8 — Relayer pubkey verify
-            let relayer_x_bytes = serialize_felt_to_u8_32(self.relayer_pubkey_x.read());
-            assert(public_inputs.relayer_pubkey_x == relayer_x_bytes, 'Invalid Relayer');
+            // Assert 8 — Placeholder (Removed: Noir circuit now handles relayer verification internally)
 
             // Assert 9 — ZK proof (qua Garaga)
             let verifier = IGaragaVerifierDispatcher { contract_address: self.garaga_verifier.read() };

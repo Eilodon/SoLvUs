@@ -19,8 +19,6 @@ export interface ProverInputParams {
   nonce: bigint;
   badgeType: 1 | 2 | 3;
   tier: number;
-  relayerPubkeyXFelt: bigint;    // felt252 from contract storage
-  relayerPubkeyYFelt: bigint;
 }
 
 /**
@@ -45,9 +43,7 @@ export async function buildProverInputs(
     params.badgeType
   );
   
-  // Step 3: Serialize Relayer Pubkey from Storage format (felt252) to bytes for Circuit
-  const relayerPubkeyX = Array.from(felt252ToU8Array32(params.relayerPubkeyXFelt));
-  const relayerPubkeyY = Array.from(felt252ToU8Array32(params.relayerPubkeyYFelt));
+  // Step 3: (Removed: relayer_pubkey is no longer a public input)
   
   // Step 4: Assemble 15 fields (Match Noir main.nr exactly)
   return {
@@ -59,12 +55,10 @@ export async function buildProverInputs(
     btc_data:         params.relayerResponse.btc_data,
     nullifier_secret: params.nullifierSecretHex,
     
-    // --- PUBLIC INPUTS (9) ---
+    // --- PUBLIC INPUTS (7) ---
     starknet_address: toFieldHex(BigInt(params.starknetAddress)),
     nonce:            toFieldHex(params.nonce),
     badge_type:       params.badgeType,
-    relayer_pubkey_x: relayerPubkeyX,
-    relayer_pubkey_y: relayerPubkeyY,
     threshold:        threshold,
     is_upper_bound:   false, // Default to false per PRD Sprint 0
     timestamp:        params.relayerResponse.timestamp, // USE RELAYER TIMESTAMP (INV-12)

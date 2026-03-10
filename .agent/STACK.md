@@ -32,16 +32,18 @@
 
 ### Noir Circuit
 
-| Dependency | Source | Notes |
-|---|---|---|
-| `dep::std` | Noir stdlib | `sha256`, `ecdsa_secp256k1`, `poseidon::bn254::hash_4` |
+| Dependency | Version | Purpose | Notes |
+|---|---|---|---|
+| `nargo` | **`1.0.0-beta.16`** | Noir Compiler | Pinned for Garaga 1.0.1 compatibility |
+| `@aztec/bb.js` | **`3.0.0-nightly.20251104`** | Backend (WASM) | AVX2 hardware fallback |
+| `dep::std` | Noir stdlib | Cryptography | `poseidon::bn254` |
 
 ### Cairo Contract
 
-| Dependency | Notes |
-|---|---|
-| Garaga verifier | External contract address stored in `Storage.garaga_verifier` |
-| Starknet std | `get_caller_address()`, `get_block_timestamp()`, `LegacyMap` |
+| Dependency | Purpose | Notes |
+|---|---|---|
+| Garaga | On-chain Verifier Logic | Used as a library and to generate `solvus_verifier/` |
+| Starknet std | Core SDK | `get_caller_address()`, etc. |
 
 ---
 

@@ -119,7 +119,7 @@ export async function runPhase0Tests(relayerPubkeyXHex?: string, rawPubkeyXBytes
   // Test 2: splitTo128BitFields round-trip
   const testBytes = new Uint8Array(32).fill(0xAA);
   const [hi, lo] = splitTo128BitFields(testBytes);
-  const reconstructed = (hi << 128n) | lo;
+  const reconstructed = (hi << 128n) + lo;
   const original = BigInt('0x' + Buffer.from(testBytes).toString('hex'));
   if (reconstructed !== original) {
     throw new Error('FAIL [2/3]: splitTo128BitFields round-trip mismatch');

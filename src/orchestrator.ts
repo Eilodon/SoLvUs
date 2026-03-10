@@ -16,8 +16,6 @@ export interface IssueBadgeParams {
   starknetAddress: string;
   badgeType: 1 | 2 | 3;
   tier: number;
-  relayerPubkeyXFelt: bigint;
-  relayerPubkeyYFelt: bigint;
   proverServerUrl: string;
   starknetContract: StarknetContract;
   onProgress?: (step: string, detail?: string) => void;
@@ -47,23 +45,22 @@ function hexToBytes(hex: string): Uint8Array {
  * INV-07: Public Inputs must match 1:1 with Cairo struct order.
  */
 function buildPublicInputsStruct(publicInputs: string[]) {
-  // Mapping based on contract.cairo PublicInputs struct:
+  // Mapping based on contract.cairo PublicInputs struct (8 fields):
   // 0: starknet_address
   // 1: nonce
   // 2: badge_type
-  // 3: relayer_pubkey_x (array of 32 bytes usually flattened in some verifiers, but Cairo struct expects [u8;32])
-  // ... however, if Noir returns them as Fields, we need to handle them.
-  // Assuming a standard mapping for Solvus V1:
+  // 3: threshold
+  // 4: is_upper_bound
+  // 5: timestamp
+  // 6: nullifier_hash
   return {
     starknet_address: publicInputs[0],
     nonce: publicInputs[1],
     badge_type: parseInt(publicInputs[2], 16),
-    relayer_pubkey_x: publicInputs.slice(3, 35).map(x => parseInt(x, 16)),
-    relayer_pubkey_y: publicInputs.slice(35, 67).map(x => parseInt(x, 16)),
-    threshold: BigInt(publicInputs[67]),
-    is_upper_bound: publicInputs[68] === '0x01' || publicInputs[68] === '1',
-    timestamp: parseInt(publicInputs[69], 16),
-    nullifier_hash: publicInputs[70]
+    threshold: BigInt(publicInputs[3]),
+    is_upper_bound: publicInputs[4] === '0x01' || publicInputs[4] === '1',
+    timestamp: parseInt(publicInputs[5], 16),
+    nullifier_hash: publicInputs[6]
   };
 }
 
@@ -77,8 +74,6 @@ export async function issueBadge(params: IssueBadgeParams): Promise<IssueBadgeRe
     starknetAddress, 
     badgeType, 
     tier, 
-    relayerPubkeyXFelt, 
-    relayerPubkeyYFelt, 
     proverServerUrl, 
     starknetContract,
     onProgress 
@@ -104,7 +99,7 @@ export async function issueBadge(params: IssueBadgeParams): Promise<IssueBadgeRe
   ]);
 
   // Step 4 — Build prover inputs
-  onProgress?.('Preparing prover inputs...', 'Assembling 15-field input object');
+  onProgress?.('Preparing prover inputs...', 'Assembling 13-field input object');
   const proverInputs = await buildProverInputs({
     pubkeyXBytes,
     pubkeyYBytes,
@@ -115,8 +110,6 @@ export async function issueBadge(params: IssueBadgeParams): Promise<IssueBadgeRe
     nonce,
     badgeType,
     tier,
-    relayerPubkeyXFelt,
-    relayerPubkeyYFelt,
   });
 
   // Step 5 — Generate proof via server

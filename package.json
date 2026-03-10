@@ -22,6 +22,8 @@
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
+    "garaga": "^1.0.1",
+    "puppeteer": "^24.38.0",
     "starknet": "^7.1.0"
   },
   "devDependencies": {
