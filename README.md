@@ -49,7 +49,7 @@ assert(solvus.is_badge_valid(borrower, WHALE_BADGE, tier: 2),
 - **Privacy:** `pubkey_x` and `pubkey_y` never leave the ZK circuit environment.
 
 ## Live Demo
-- **Testnet contract:** [0x00...000 (Sepolia)](https://sepolia.starkscan.co/contract/0x0000000000000000000000000000000000000000)
+- **Testnet contract:** [0x7735...9a9 (Sepolia)](https://sepolia.voyager.online/contract/0x773545d7b7a99dca4cf0d9b7414fbc4cbf24703dd83a23e1de394c8b67e99a9)
 - **Demo Site:** [Live on Vercel (Coming Soon) / See video in walkthrough.md]
 
 ## Security Design
