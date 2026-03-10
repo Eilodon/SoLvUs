@@ -365,7 +365,13 @@
 
 ---
 
-## [2026-03-10] — GitHub Actions Verifier Generation
+## [2026-03-10] — Cairo Directory Cleanup & Circuit Recompile
+- **Modified:** `circuits/target/solvus.json` (recompiled), `cairo/src/solvus_verifier/Scarb.toml` (fixed garaga dep), deleted stale files
+- **Structural change:** Removed `cairo/solvus_verifier/`, `cairo/src/honk_verifier_constants.cairo`, `cairo/src/lib.cairo`, `cairo/src/solvus_verifier/src/` (nested duplicate)
+- **Dep change:** garaga dependency: `path = "../../../"` → `git = "https://github.com/keep-starknet-strange/garaga", tag = "v1.0.1"`
+- **Invariants touched:** None (cleanup only)
+- **Open issues:** VK regeneration blocked by bb architecture issue; verifier still has `public_inputs_size: 1` from old circuit
+- **Phase 0 status:** Circuit verified to have 7 public inputs, recompiled; need VK regen via GitHub Actions
 - **Modified:** cairo/contract.cairo, circuits/src/main.nr, src/orchestrator.ts, src/prover/inputs.ts, src/demo/pregenerate.ts, .agent/PROJECT_MAP.md
 - **Structural change:** Removed `relayer_pubkey` from Cairo Storage/PublicInputs, deleted `serialize_felt_to_u8_32` helper.
 - **Dep change:** none
