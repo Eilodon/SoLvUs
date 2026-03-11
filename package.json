@@ -2,13 +2,12 @@
   "name": "solvus-protocol",
   "version": "0.1.0",
   "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
-    "phase0:xverse": "ts-node phase0/xverse_format.ts",
-    "phase0:poseidon": "ts-node phase0/poseidon_verify.ts",
-    "phase0:calldata": "ts-node -e \"require('./src/calldata_helper').runPhase0Tests()\"",
-    "typecheck": "tsc --noEmit",
-    "lint:crypto": "grep -rn 'allocUnsafe\\|Date\\.now()' src/prover/ src/client/ --include='*.ts'",
-    "server": "ts-node src/server/prover_server.ts"
+    "dev": "npm run dev --workspace=@solvus/frontend",
+    "server": "ts-node packages/prover-server/prover_server.ts"
   },
   "dependencies": {
     "@noble/curves": "^1.4.0",

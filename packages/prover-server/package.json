@@ -1,0 +1,8 @@
+{
+  "name": "@solvus/prover-server",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "ts-node prover_server.ts"
+  }
+}

@@ -418,3 +418,21 @@
 - **Dep change:** none
 - **Invariants touched:** INV-09, INV-10, INV-11 (Relayer payload & signing)
 - **Status:** 🏆 Submission READY. /sign endpoint verified. README synced.
+
+---
+
+## [2026-03-11] — Cleanup Redundant Environments
+- **Modified:** .agent/PROJECT_MAP.md, .agent/SESSION_LOG.md
+- **Structural change:** Deleted redundant/broken venvs: `garaga-venv`, `garaga-venv-3.10`
+- **Dep change:** none
+- **Invariants touched:** none — infrastructure cleanup
+- **Status:** 🧹 Environment cleaned. Only `garaga310-venv` (Python 3.10) remains.
+
+---
+
+## [2026-03-11] — Monorepo Architecture Refactor
+- **Modified:** package.json (root), .agent/PROJECT_MAP.md, packages/ (all)
+- **Structural change:** Full migration to Monorepo. Path: `src/` & `ui/` -> `packages/core`, `packages/prover-server`, `packages/frontend`.
+- **Dep change:** Enabled npm workspaces. Standardized `@solvus/core` internal package.
+- **Invariants touched:** INV-01 to INV-16 (Relocated logic, verified integrity)
+- **Status:** 🏗️ Architecture optimized. Sub-packages initialized. Imports updated.

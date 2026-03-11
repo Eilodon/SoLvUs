@@ -6,9 +6,14 @@
     "strict": true,
     "esModuleInterop": true,
     "resolveJsonModule": true,
+    "moduleResolution": "node",
+    "baseUrl": "./",
+    "paths": {
+      "@solvus/*": ["packages/*"]
+    },
     "outDir": "./dist",
     "rootDir": "./"
   },
-  "include": ["src/**/*", "phase0/**/*"],
+  "include": ["packages/**/*", "phase0/**/*"],
   "exclude": ["node_modules", "dist"]
 }

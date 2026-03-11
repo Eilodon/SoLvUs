@@ -12,47 +12,14 @@ import { sha256 } from '@noble/hashes/sha256';
 // Load .env from project root
 dotenv.config({ path: path.join(__dirname, '../../.env') });
 
+import { fetchRelayerData, u64ToBigEndian } from '../core/index';
+
 const app = express();
 const PORT = process.env.PROVER_PORT || 3002;
 const CIRCUITS_PATH = path.join(__dirname, '../../circuits');
 
 app.use(cors());
 app.use(bodyParser.json());
-
-// Helper for Relayer Payloads
-function u64ToBigEndian(value: number | bigint): Buffer {
-  const buf = Buffer.alloc(8);
-  buf.writeBigUInt64BE(BigInt(value));
-  return buf;
-}
-
-// Dummy BTC API
-const xverseApi = {
-  getBalance: async (address: string) => ({ balance: 0 }),
-  getUtxos: async (address: string) => [] as { block_time: number }[],
-};
-
-/**
- * BTC Data Fetcher
- */
-async function getBtcData(btcAddress: string, badgeType: number): Promise<number> {
-  if (badgeType === 1) { // Whale
-    const { balance } = await xverseApi.getBalance(btcAddress);
-    return balance;
-  }
-  if (badgeType === 2) { // Hodler
-    const utxos = await xverseApi.getUtxos(btcAddress);
-    if (utxos.length === 0) return 0;
-    const oldest = utxos.reduce((min: number, u: any) => Math.min(min, u.block_time), Infinity);
-    const nowSeconds = Math.floor(Date.now() / 1000);
-    return Math.floor((nowSeconds - oldest) / 86400);
-  }
-  if (badgeType === 3) { // Stacker
-    const utxos = await xverseApi.getUtxos(btcAddress);
-    return utxos.length;
-  }
-  throw new Error(`Unknown badge_type: ${badgeType}`);
-}
 
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: Date.now() });
@@ -111,26 +78,18 @@ app.post('/sign', async (req, res) => {
 
     console.log(`[Relayer] Signing data for BTC Address: ${btcAddress}, Badge Type: ${badgeType}`);
 
-    const btc_data = await getBtcData(btcAddress, Number(badgeType));
-    const timestamp = Math.floor(Date.now() / 1000);
-    const pubkeyXBytes = Buffer.from(pubkeyX.replace('0x', ''), 'hex');
-
-    // Payload: pubkey_x[32] + btc_data[8BE] + timestamp[8BE]
-    const payload = Buffer.concat([
-      pubkeyXBytes,
-      u64ToBigEndian(btc_data),
-      u64ToBigEndian(timestamp),
-    ]);
-
-    const relayer_sig = secp256k1
-      .sign(sha256(payload), privateKey.replace('0x', ''))
-      .toCompactRawBytes();
+    const relayerResponse = await fetchRelayerData(
+      Buffer.from(pubkeyX.replace('0x', ''), 'hex'),
+      btcAddress,
+      Number(badgeType),
+      privateKey
+    );
 
     res.json({
       success: true,
-      btc_data,
-      timestamp,
-      relayer_sig: '0x' + Buffer.from(relayer_sig).toString('hex')
+      btc_data: relayerResponse.btc_data,
+      timestamp: relayerResponse.timestamp,
+      relayer_sig: '0x' + Buffer.from(relayerResponse.relayer_sig).toString('hex')
     });
   } catch (error: any) {
     console.error('[Relayer] Signing failed:', error.message);
