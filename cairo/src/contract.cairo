@@ -4,8 +4,6 @@ mod SolvusBadge {
     use starknet::storage::{Map, StoragePointerReadAccess, StoragePointerWriteAccess, StoragePathEntry};
     use core::array::ArrayTrait;
     use core::traits::Into;
-    use core::traits::TryInto;
-    use core::option::OptionTrait;
 
     // --- PHẦN 1: TYPES (v0.1.1) ---
 
@@ -96,7 +94,7 @@ mod SolvusBadge {
             assert(public_inputs.starknet_address == caller.into(), 'Caller mismatch');
 
             // Assert 2 — Nonce match (chống replay)
-            let stored_nonce = self.nonces.read(caller);
+            let stored_nonce = self.nonces.entry(caller).read();
             assert(public_inputs.nonce == stored_nonce, 'Nonce mismatch');
 
             // Assert 3 — Badge type match
@@ -125,7 +123,7 @@ mod SolvusBadge {
 
             // Nullifier + badge write
             let key = (public_inputs.nullifier_hash, badge_type);
-            let existing = self.nullifier_registry.read(key);
+            let existing = self.nullifier_registry.entry(key).read();
             
             let is_empty = existing.starknet_holder.is_zero();
             let is_expired = get_block_timestamp() >= existing.expires_at;
@@ -135,9 +133,9 @@ mod SolvusBadge {
             }
 
             let expires = get_block_timestamp() + 259200; // 72h
-            self.nullifier_registry.write(key, NullifierEntry { starknet_holder: caller, tier, expires_at: expires });
-            self.badges.write((caller, badge_type), BitcoinSolvencyBadge { tier, nullifier_hash: public_inputs.nullifier_hash, expires_at: expires });
-            self.nonces.write(caller, stored_nonce + 1);
+            self.nullifier_registry.entry(key).write(NullifierEntry { starknet_holder: caller, tier, expires_at: expires });
+            self.badges.entry((caller, badge_type)).write(BitcoinSolvencyBadge { tier, nullifier_hash: public_inputs.nullifier_hash, expires_at: expires });
+            self.nonces.entry(caller).write(stored_nonce + 1);
         }
 
         fn is_badge_valid(
@@ -146,7 +144,7 @@ mod SolvusBadge {
             badge_type: u8,
             min_tier: u8
         ) -> bool {
-            let badge = self.badges.read((holder, badge_type));
+            let badge = self.badges.entry((holder, badge_type)).read();
 
             // Check 1: badge tồn tại
             if badge.tier == 0 { return false; }
@@ -159,7 +157,7 @@ mod SolvusBadge {
 
             // Check 4: nullifier vẫn active trên đúng holder
             let key = (badge.nullifier_hash, badge_type);
-            let entry = self.nullifier_registry.read(key);
+            let entry = self.nullifier_registry.entry(key).read();
 
             (entry.starknet_holder == holder) && (get_block_timestamp() < entry.expires_at)
         }

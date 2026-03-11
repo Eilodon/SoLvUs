@@ -430,9 +430,14 @@
 
 ---
 
+## [2026-03-11] — Cairo Scarb Consolidation & Upgrade
+- **Changed:** Merged `solvus_verifier/Scarb.toml` into root, upgraded to Starknet 2.14.0, added Garaga dependency, registered verifier module.
+- **Impact:** Unified build system, resolved technical debt, aligned with latest ZK verifier toolchain (Garaga v1.0.1).
+- **Open Issues:** Local Scarb toolchain (2.8.5) is too old for the new manifest; requires manual upgrade to 2.14.0+.
+
+---
+
 ## [2026-03-11] — Monorepo Architecture Refactor
-- **Modified:** package.json (root), .agent/PROJECT_MAP.md, packages/ (all)
-- **Structural change:** Full migration to Monorepo. Path: `src/` & `ui/` -> `packages/core`, `packages/prover-server`, `packages/frontend`.
-- **Dep change:** Enabled npm workspaces. Standardized `@solvus/core` internal package.
-- **Invariants touched:** INV-01 to INV-16 (Relocated logic, verified integrity)
-- **Status:** 🏗️ Architecture optimized. Sub-packages initialized. Imports updated.
+- **Changed:** Full migration to Monorepo. Moved `src/` & `ui/` -> `packages/core`, `packages/prover-server`, `packages/frontend`. Enabled npm workspaces.
+- **Impact:** Modularized architecture, centralized cryptographic logic in `@solvus/core`, professionalized project for hackathon submission.
+- **Open Issues:** Legacy `src` and `scripts` folders deleted; some outdated artifacts might still reference old paths.

@@ -1,0 +1,1 @@
+   Compiling solvus v0.1.0 (/home/ybao/B.1/SoLvUs/cairo/Scarb.toml)

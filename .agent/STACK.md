@@ -40,10 +40,11 @@
 
 ### Cairo Contract
 
-| Dependency | Purpose | Notes |
-|---|---|---|
-| Garaga | On-chain Verifier Logic | Used as a library and to generate `solvus_verifier/` |
-| Starknet std | Core SDK | `get_caller_address()`, etc. |
+| Dependency | Version | Purpose | Notes |
+|---|---|---|---|
+| Starknet std | **2.14.0** | Core SDK | `get_caller_address()`, etc. |
+| Garaga | **1.0.1** | On-chain Verifier Logic | Used as a library and to generate `solvus_verifier/` |
+| assert_macros | **2.14.0** | Testing Utilities | Required for 2.14.0 build |
 
 ---
 

@@ -9,7 +9,6 @@ use core::circuit::CircuitElement as CE;
 use core::circuit::CircuitInput as CI;
 use garaga::definitions::{G1Point};
 
-#[inline(always)]
 pub fn run_GRUMPKIN_ZK_HONK_SUMCHECK_SIZE_17_PUB_23_circuit(p_public_inputs:Span<u256>,p_pairing_point_object:Span<u256>,libra_sum:u384,sumcheck_univariates_flat:Span<u256>,sumcheck_evaluations:Span<u256>,libra_evaluation:u384,tp_sum_check_u_challenges:Span<u128>,tp_gate_challenge:u128,tp_eta_1:u384,tp_eta_2:u384,tp_eta_3:u384,tp_beta:u384,tp_gamma:u384,tp_base_rlc:u384,tp_alpha:u128,tp_libra_challenge:u384, modulus:core::circuit::CircuitModulus)->(u384,u384) {
 
  // CONSTANT stack
@@ -2027,7 +2026,6 @@ circuit_inputs = circuit_inputs.next_2(tp_libra_challenge); // in269
 let check_rlc:u384 = outputs.get_output(t1331);
 let check:u384 = outputs.get_output(t1854);return (check_rlc,check);
 }
-const ZK_HONK_SUMCHECK_SIZE_17_PUB_23_GRUMPKIN_CONSTANTS: [u384; 25] = [u384{limb0:0x1, limb1:0x0, limb2:0x0, limb3:0x0}, u384{limb0:0x10000000, limb1:0x0, limb2:0x0, limb3:0x0}, u384{limb0:0x9d80, limb1:0x0, limb2:0x0, limb3:0x0}, u384{limb0:0x79b9709143e1f593efffec51, limb1:0xb85045b68181585d2833e848, limb2:0x30644e72e131a029, limb3:0x0}, u384{limb0:0x5a0, limb1:0x0, limb2:0x0, limb3:0x0}, u384{limb0:0x79b9709143e1f593effffd31, limb1:0xb85045b68181585d2833e848, limb2:0x30644e72e131a029, limb3:0x0}, u384{limb0:0x240, limb1:0x0, limb2:0x0, limb3:0x0}, u384{limb0:0x0, limb1:0x0, limb2:0x0, limb3:0x0}, u384{limb0:0x2, limb1:0x0, limb2:0x0, limb3:0x0}, u384{limb0:0x3, limb1:0x0, limb2:0x0, limb3:0x0}, u384{limb0:0x4, limb1:0x0, limb2:0x0, limb3:0x0}, u384{limb0:0x5, limb1:0x0, limb2:0x0, limb3:0x0}, u384{limb0:0x6, limb1:0x0, limb2:0x0, limb3:0x0}, u384{limb0:0x7, limb1:0x0, limb2:0x0, limb3:0x0}, u384{limb0:0x8, limb1:0x0, limb2:0x0, limb3:0x0}, u384{limb0:0x3cdcb848a1f0fac9f8000000, limb1:0xdc2822db40c0ac2e9419f424, limb2:0x183227397098d014, limb3:0x0}, u384{limb0:0x79b9709143e1f593f0000000, limb1:0xb85045b68181585d2833e848, limb2:0x30644e72e131a029, limb3:0x0}, u384{limb0:0x11, limb1:0x0, limb2:0x0, limb3:0x0}, u384{limb0:0x9, limb1:0x0, limb2:0x0, limb3:0x0}, u384{limb0:0x100000000000000000, limb1:0x0, limb2:0x0, limb3:0x0}, u384{limb0:0x4000, limb1:0x0, limb2:0x0, limb3:0x0}, u384{limb0:0x29ca1d7fb56821fd19d3b6e7, limb1:0x4b1e03b4bd9490c0d03f989, limb2:0x10dc6e9c006ea38b, limb3:0x0}, u384{limb0:0xd4dd9b84a86b38cfb45a740b, limb1:0x149b3d0a30b3bb599df9756, limb2:0xc28145b6a44df3e, limb3:0x0}, u384{limb0:0x60e3596170067d00141cac15, limb1:0xb2c7645a50392798b21f75bb, limb2:0x544b8338791518, limb3:0x0}, u384{limb0:0xb8fa852613bc534433ee428b, limb1:0x2e2e82eb122789e352e105a3, limb2:0x222c01175718386f, limb3:0x0}];#[inline(always)]
 pub fn run_GRUMPKIN_ZKHONK_PREP_MSM_SCALARS_SIZE_17_circuit(p_sumcheck_evaluations:Span<u256>,p_gemini_masking_eval:u384,p_gemini_a_evaluations:Span<u256>,p_libra_poly_evals:Span<u256>,tp_gemini_r:u384,tp_rho:u384,tp_shplonk_z:u384,tp_shplonk_nu:u384,tp_sum_check_u_challenges:Span<u128>, modulus:core::circuit::CircuitModulus)->(u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384,u384) {
 
  // CONSTANT stack
@@ -2795,7 +2793,6 @@ let scalar_54:u384 = outputs.get_output(t619);
 let scalar_55:u384 = outputs.get_output(t637);
 let scalar_56:u384 = outputs.get_output(t634);
 let scalar_57:u384 = outputs.get_output(t636);return (scalar_1,scalar_2,scalar_3,scalar_4,scalar_5,scalar_6,scalar_7,scalar_8,scalar_9,scalar_10,scalar_11,scalar_12,scalar_13,scalar_14,scalar_15,scalar_16,scalar_17,scalar_18,scalar_19,scalar_20,scalar_21,scalar_22,scalar_23,scalar_24,scalar_25,scalar_26,scalar_27,scalar_28,scalar_29,scalar_30,scalar_31,scalar_32,scalar_33,scalar_34,scalar_35,scalar_36,scalar_37,scalar_38,scalar_39,scalar_40,scalar_41,scalar_42,scalar_43,scalar_44,scalar_45,scalar_46,scalar_47,scalar_48,scalar_49,scalar_50,scalar_51,scalar_52,scalar_53,scalar_54,scalar_55,scalar_56,scalar_57);
-}#[inline(always)]
 pub fn run_GRUMPKIN_ZK_HONK_EVALS_CONS_INIT_SIZE_17_circuit(tp_gemini_r:u384, modulus:core::circuit::CircuitModulus)->(u384,u384) {
 
  // CONSTANT stack
@@ -2820,7 +2817,6 @@ circuit_inputs = circuit_inputs.next_2([0x8712848a692c553d0329f5d6,0x64751ad938e
         let outputs = circuit_inputs.done_2().eval(modulus).unwrap();
 let challenge_poly_eval:u384 = outputs.get_output(t1);
 let root_power_times_tp_gemini_r:u384 = outputs.get_output(t2);return (challenge_poly_eval,root_power_times_tp_gemini_r);
-}#[inline(always)]
 pub fn run_GRUMPKIN_ZK_HONK_EVALS_CONS_LOOP_SIZE_17_circuit(challenge_poly_eval:u384,root_power_times_tp_gemini_r:u384,tp_sumcheck_u_challenge:u384, modulus:core::circuit::CircuitModulus)->(u384,u384) {
 
  // CONSTANT stack
@@ -2897,7 +2893,6 @@ circuit_inputs = circuit_inputs.next_2(tp_sumcheck_u_challenge); // in4
         let outputs = circuit_inputs.done_2().eval(modulus).unwrap();
 let challenge_poly_eval:u384 = outputs.get_output(t51);
 let root_power_times_tp_gemini_r:u384 = outputs.get_output(t52);return (challenge_poly_eval,root_power_times_tp_gemini_r);
-}#[inline(always)]
 pub fn run_GRUMPKIN_ZK_HONK_EVALS_CONS_DONE_SIZE_17_circuit(p_libra_evaluation:u384,p_libra_poly_evals:Span<u256>,tp_gemini_r:u384,challenge_poly_eval:u384,root_power_times_tp_gemini_r:u384, modulus:core::circuit::CircuitModulus)->(u384,u384) {
 
  // CONSTANT stack
