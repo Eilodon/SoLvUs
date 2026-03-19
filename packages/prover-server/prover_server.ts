@@ -6,8 +6,6 @@ import { exec } from 'child_process';
 import { writeFileSync, readFileSync, unlinkSync, existsSync } from 'fs';
 import { randomUUID } from 'crypto';
 import path from 'path';
-import { secp256k1 } from '@noble/curves/secp256k1';
-import { sha256 } from '@noble/hashes/sha256';
 
 // Load .env from project root
 dotenv.config({ path: path.join(__dirname, '../../.env') });
@@ -15,14 +13,14 @@ dotenv.config({ path: path.join(__dirname, '../../.env') });
 import { fetchRelayerData, u64ToBigEndian } from '../core/index';
 
 const app = express();
-const PORT = process.env.PROVER_PORT || 3002;
+const PORT = process.env.PROVER_PORT || 3001;
 const CIRCUITS_PATH = path.join(__dirname, '../../circuits');
 
 app.use(cors());
 app.use(bodyParser.json());
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: Date.now() });
+  res.json({ status: 'ok', timestamp: Math.floor(Date.now() / 1000) });
 });
 
 app.post('/prove', async (req, res) => {
@@ -73,8 +71,8 @@ app.post('/sign', async (req, res) => {
       return res.status(400).json({ error: 'Missing fields' });
     }
 
-    const privateKey = process.env.RELAYER_PRIVATE_KEY;
-    if (!privateKey) throw new Error('RELAYER_PRIVATE_KEY is missing in env');
+    const privateKey = process.env.RELAYER_EDDSA_PRIVATE_KEY;
+    if (!privateKey) throw new Error('RELAYER_EDDSA_PRIVATE_KEY is missing in env');
 
     console.log(`[Relayer] Signing data for BTC Address: ${btcAddress}, Badge Type: ${badgeType}`);
 
@@ -89,7 +87,9 @@ app.post('/sign', async (req, res) => {
       success: true,
       btc_data: relayerResponse.btc_data,
       timestamp: relayerResponse.timestamp,
-      relayer_sig: '0x' + Buffer.from(relayerResponse.relayer_sig).toString('hex')
+      relayer_sig_s:    relayerResponse.relayer_sig_s,
+      relayer_sig_r8_x: relayerResponse.relayer_sig_r8_x,
+      relayer_sig_r8_y: relayerResponse.relayer_sig_r8_y,
     });
   } catch (error: any) {
     console.error('[Relayer] Signing failed:', error.message);

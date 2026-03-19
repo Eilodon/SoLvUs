@@ -1,5 +1,6 @@
 declare module 'circomlibjs' {
   export function buildPoseidon(): Promise<any>;
+  export function buildEddsa(): Promise<any>;
 }
 declare module 'sats-connect' {
   export function getPublicKey(options: { address: string }): Promise<{ publicKey: string }>;

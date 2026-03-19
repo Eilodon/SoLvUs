@@ -47,8 +47,8 @@ After EVERY code change, confirm:
 [ ] Appended to .agent/SESSION_LOG.md
 [ ] Ran consistency checks:
     - npx tsc --noEmit
-    - grep -rn "allocUnsafe\|Date\.now()" src/prover/ src/client/
-    - grep -rn " | \| & " src/ cairo/ (check for bitwise operators)
+    - grep -rn "allocUnsafe\|Date\.now()" packages/core/prover/ packages/core/client/
+    - grep -rn " | \| & " packages/ cairo/ (check for bitwise operators)
 
 ---
 

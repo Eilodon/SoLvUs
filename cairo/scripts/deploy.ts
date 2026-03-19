@@ -40,14 +40,9 @@ async function deploy() {
     const sierra = JSON.parse(fs.readFileSync(sierraPath, 'utf8'));
     const casm = JSON.parse(fs.readFileSync(casmPath, 'utf8'));
 
-    // 2. Derive Relayer Pubkey (X, Y)
-    // Relayer uses a standard ECDSA key for signing BTC data attestations.
-    const relayerPoint = ec.starkCurve.ProjectivePoint.fromPrivateKey(BigInt(relayerPrivateKey));
-    const relayerPubkeyX = num.toHex(relayerPoint.x);
-    const relayerPubkeyY = num.toHex(relayerPoint.y);
+    // 2. Relayer keys are now BabyJubJub and hardcoded in the circuit. 
+    // We no longer need to pass them to the Starknet contract constructor.
 
-    console.log('Relayer Pubkey X:', relayerPubkeyX);
-    console.log('Relayer Pubkey Y:', relayerPubkeyY);
 
     // 3. Declare contract
     console.log('⏳ Declaring/Fetching contract class...');
@@ -109,9 +104,7 @@ async function deploy() {
         class_hash: classHash,
         deploy_tx: transaction_hash,
         deployed_at: new Date().toISOString(),
-        garaga_verifier: garagaVerifier,
-        relayer_pubkey_x: relayerPubkeyX,
-        relayer_pubkey_y: relayerPubkeyY
+        garaga_verifier: garagaVerifier
     };
 
     fs.writeFileSync(path.join(__dirname, '../deployment.json'), JSON.stringify(deployment, null, 2));

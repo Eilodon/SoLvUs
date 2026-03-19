@@ -64,7 +64,7 @@ Xem cột "Consumers" trong PROJECT_MAP.md. Đổi 1 file = phải check toàn b
 → Rule 4 của PRD. Grep toàn bộ file sau khi viết xong.
 
 ### R5 — Không hardcode giá trị cryptographic bằng cách gõ lại
-Dùng constant đã định nghĩa trong `src/shared/utils.ts`. KHÔNG tự tính lại `BN254_PRIME`.
+Dùng constant đã định nghĩa trong `packages/core/shared/utils.ts`. KHÔNG tự tính lại `BN254_PRIME`.
 
 ### R6 — `pubkey_x` và `pubkey_y` (BTC) là PRIVATE tuyệt đối
 KHÔNG truyền vào Cairo contract. KHÔNG log. KHÔNG expose qua bất kỳ public interface nào.
@@ -94,17 +94,17 @@ Không dùng `^0.1.7` hay `~0.1.7`. Khác version = Poseidon output khác = proo
 npx tsc --noEmit
 
 # 2. Kiểm tra boolean operators sai
-grep -rn " | " src/ --include="*.ts" | grep -v "||"   # bitwise OR leak
-grep -rn " & " src/ --include="*.ts" | grep -v "&&"   # bitwise AND leak
+grep -rn " | " packages/core/ --include="*.ts" | grep -v "||"   # bitwise OR leak
+grep -rn " & " packages/core/ --include="*.ts" | grep -v "&&"   # bitwise AND leak
 
 # 3. Kiểm tra allocUnsafe
-grep -rn "allocUnsafe" src/ --include="*.ts"
+grep -rn "allocUnsafe" packages/core/ --include="*.ts"
 
 # 4. Kiểm tra Date.now() trong context sai
-grep -rn "Date.now()" src/prover/ src/client/ --include="*.ts"
+grep -rn "Date.now()" packages/core/prover/ packages/core/client/ --include="*.ts"
 
 # 5. Kiểm tra await bị thiếu cho buildProverInputs / computeNullifierHash
-grep -rn "buildProverInputs\|computeNullifierHash" src/ --include="*.ts" | grep -v "await"
+grep -rn "buildProverInputs\|computeNullifierHash" packages/core/ --include="*.ts" | grep -v "await"
 
 # 6. Noir (nếu sửa circuit)
 cd circuits && nargo check

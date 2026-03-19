@@ -1,0 +1,16 @@
+pubkey_x = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+pubkey_y = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+user_sig = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+relayer_sig_s = "0x0416625a9283fcec0dc179e468479b336996c2240785a5c2449e72d33be156e7"
+relayer_sig_r8_x = "0x24f5eb9db919109e4fa427ed03e0a14a8eac8a7fd283150b80f8d104b836f533"
+relayer_sig_r8_y = "0x12c41cd5bcecd4fa6b52f1ef7c61aedb4aefb894dfa139dcc8c9ec70a92acd30"
+btc_data = 0
+nullifier_secret = "0x123"
+starknet_address = "0x00000000d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7"
+nonce = "0x1"
+badge_type = 1
+_tier = 1
+threshold = 0
+is_upper_bound = false
+timestamp = 1773233292
+nullifier_hash = "0x15d1452d2b1b04847bd07c958b30ddbccdd5afff633de4341058c11d80d7a7e0"

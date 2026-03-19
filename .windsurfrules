@@ -80,17 +80,17 @@ NO `^0.1.7` or `~0.1.7`. Different version = different Poseidon output = proof f
 npx tsc --noEmit
 
 # 2. Check boolean operator leaks
-grep -rn " | " src/ --include="*.ts" | grep -v "||"
-grep -rn " & " src/ --include="*.ts" | grep -v "&&"
+grep -rn " | " packages/ --include="*.ts" | grep -v "||"
+grep -rn " & " packages/ --include="*.ts" | grep -v "&&"
 
 # 3. Check allocUnsafe
-grep -rn "allocUnsafe" src/ --include="*.ts"
+grep -rn "allocUnsafe" packages/ --include="*.ts"
 
 # 4. Check Date.now() in wrong context
-grep -rn "Date.now()" src/prover/ src/client/ --include="*.ts"
+grep -rn "Date.now()" packages/core/prover/ packages/core/client/ --include="*.ts"
 
 # 5. Check missing await for buildProverInputs / computeNullifierHash
-grep -rn "buildProverInputs\|computeNullifierHash" src/ --include="*.ts" | grep -v "await"
+grep -rn "buildProverInputs\|computeNullifierHash" packages/ --include="*.ts" | grep -v "await"
 
 # 6. Noir (if circuit modified)
 cd circuits && nargo check

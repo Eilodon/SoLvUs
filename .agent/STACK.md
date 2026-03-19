@@ -21,22 +21,26 @@
 
 | Package | Version | Pin Style | Purpose | Owner Module |
 |---|---|---|---|---|
-| `@noble/curves` | latest stable | `^` OK | secp256k1 ECDSA, BN254 mod | `shared/utils.ts`, `relayer/index.ts` |
-| `@noble/hashes` | latest stable | `^` OK | SHA-512, SHA-256 | `shared/utils.ts`, `relayer/index.ts` |
+| `@noble/curves` | latest stable | `^` OK | secp256k1 ECDSA, BN254 mod | `packages/core/shared/utils.ts`, `packages/core/relayer/index.ts` |
+| `@noble/hashes` | latest stable | `^` OK | SHA-512, SHA-256 | `packages/core/shared/utils.ts`, `packages/core/relayer/index.ts` |
 | `circomlibjs` | **`0.1.7` EXACT** | ❌ NO `^` or `~` | Poseidon BN254 | `calldata_helper.ts` |
-| `express` | `^4.18.0` | `^` OK | Prover Server API | `src/prover/server.ts` |
-| `starknet` | `^6.11.0` | `^` OK | Starknet SDK | `scripts/deploy.ts`, `demo-ui/` |
+| `express` | `^5.2.1` | `^` OK | Prover Server API | `packages/prover-server/prover_server.ts` |
+| `starknet` | `^7.1.0` | `^` OK | Starknet SDK | `cairo/scripts/deploy.ts`, `packages/frontend/` |
+| `sats-connect`| latest | `^` OK | Bitcoin Wallet API | `packages/core/orchestrator.ts` |
 
 > ⚠️ `circomlibjs@0.1.7` phải pin EXACT. Khác version = Poseidon output khác = proof luôn fail.
 > Lý do: Poseidon parameters (MDS matrix, round constants) thay đổi giữa versions.
+> **Note:** `circomlibjs` có thể xuất hiện cả ở root và `@solvus/core` để hỗ trợ cả unit testing riêng lẻ và global scripts. Cả hai nơi PHẢI dùng chung version 0.1.7.
 
 ### Noir Circuit
 
 | Dependency | Version | Purpose | Notes |
 |---|---|---|---|
 | `nargo` | **`1.0.0-beta.16`** | Noir Compiler | Pinned for Garaga 1.0.1 compatibility |
-| `@aztec/bb.js` | **`3.0.0-nightly.20251104`** | Backend (WASM) | AVX2 hardware fallback |
+| `@aztec/bb.js` | `^4.0.4` | Backend (WASM) | AVX2 hardware fallback |
 | `dep::std` | Noir stdlib | Cryptography | `poseidon::bn254` |
+| `dep::eddsa` | **`0.1.3`** | BabyJubJub | Relayer Signature Verification |
+| `dep::poseidon` | **`0.1.1`** | Poseidon Hash | Relayer Signature Hash |
 
 ### Cairo Contract
 
@@ -72,7 +76,7 @@
 
 | Constant | Value | Type | File | Notes |
 |---|---|---|---|---|
-| `BN254_PRIME` | `21888242871839275222246405745257275088548364400416034343698204186575808495617n` | BigInt | `src/shared/utils.ts` | Decimal literal — KHÔNG hex |
+| `BN254_PRIME` | `21888242871839275222246405745257275088548364400416034343698204186575808495617n` | BigInt | `packages/core/shared/utils.ts` | Decimal literal — KHÔNG hex |
 | varint 128 | `0x80` | byte | `circuits/main.nr` prefix | message length = 128 chars |
 | badge expiry | `259200` seconds | u64 | `cairo/contract.cairo` | 72 giờ |
 | future timestamp tolerance | `60` seconds | u64 | `cairo/contract.cairo` | Clock drift |
@@ -124,9 +128,9 @@ use dep::std;
 | Date | Change | Impact | Fixed In |
 |---|---|---|---|
 | [V12] | `||` thay `\|` trong Cairo is_badge_valid | Logic bug: singlebit OR | cairo/contract.cairo |
-| [V13] | `reduce()` thay `Math.min(...spread)` cho UTXO | Crash large UTXO sets | relayer/index.ts |
-| [V14] | `buildProverInputs()` thành async | Silent bug nếu sync | prover/inputs.ts |
-| [V17] | timestamp source = relayerResponse | Cairo freshness fail | prover/inputs.ts |
+| [V13] | `reduce()` thay `Math.min(...spread)` cho UTXO | Crash large UTXO sets | packages/core/relayer/index.ts |
+| [V14] | `buildProverInputs()` thành async | Silent bug nếu sync | packages/core/prover/inputs.ts |
+| [V17] | timestamp source = relayerResponse | Cairo freshness fail | packages/core/prover/inputs.ts |
 
 ---
 

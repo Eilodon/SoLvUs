@@ -1,4 +1,4 @@
-import * as deployment from '../cairo/deployment.json';
+import * as deployment from '../../cairo/deployment.json';
 
 export const DEPLOYMENT = deployment;
 export const CONTRACT_ADDRESS = deployment.contract_address;

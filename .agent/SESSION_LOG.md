@@ -324,6 +324,16 @@
 
 ---
 
+## [2026-03-17] — Audit-based Docs & Code Alignment
+- **Modified:** .agent/PROJECT_MAP.md, .agent/STACK.md, .agent/INVARIANTS.md, packages/core/shared/utils.ts, packages/core/relayer/index.ts, packages/prover-server/prover_server.ts, packages/core/demo/pregenerate.ts
+- **Structural change:** Sync PROJECT_MAP to Monorepo. Path refactor in STACK/INVARIANTS.
+- **Dep change:** none
+- **Invariants touched:** INV-05 (Enforced explicit timestamp, refactored fetchRelayerData for determinism)
+- **Open issues:** none (Zero Entropy achieved)
+- **Phase 0 status:** 9/9 PASS (Re-verified after path refactor)
+
+---
+
 ## [2026-03-10] — Python 3.10 + Garaga Build Attempt
 - **Modified:** Installed pyenv, Python 3.10.14, created garaga310-venv, attempted maturin build from source
 - **Structural change:** Added garaga310-venv to project (not committed)
@@ -441,3 +451,13 @@
 - **Changed:** Full migration to Monorepo. Moved `src/` & `ui/` -> `packages/core`, `packages/prover-server`, `packages/frontend`. Enabled npm workspaces.
 - **Impact:** Modularized architecture, centralized cryptographic logic in `@solvus/core`, professionalized project for hackathon submission.
 - **Open Issues:** Legacy `src` and `scripts` folders deleted; some outdated artifacts might still reference old paths.
+
+---
+
+## [2026-03-11] — Refactor Relayer to EdDSA Poseidon
+- **Modified:** `circuits/src/main.nr`, `circuits/Nargo.toml`, `@solvus/core/relayer/`, `@solvus/core/prover/`, `prover-server`
+- **Structural change:** Added `scripts/eddsa_keygen.ts`
+- **Dep change:** Added Noir `eddsa v0.1.3` and `poseidon v0.1.1`.
+- **Invariants touched:** INV-01, INV-05, INV-09, INV-12
+- **Status:** 🏆 Refactor complete. Circuit gate count significantly reduced. Real BabyJubJub EdDSA signatures implemented via circomlibjs 0.1.7.
+

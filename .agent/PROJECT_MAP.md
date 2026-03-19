@@ -7,7 +7,7 @@
 ## 📁 Cấu trúc thư mục
 
 ```
-solvus/
+ solvus/
 ├── packages/
 │   ├── core/                        # Cryptographic primitives, shared logic & types
 │   │   ├── relayer/                 # Xverse API + relayer signing
@@ -16,9 +16,14 @@ solvus/
 │   │   ├── prover/                  # Prover inputs assembler
 │   │   ├── client/                  # User signature logic
 │   │   ├── integrations/            # DeFi integration demos (Vesu)
+│   │   ├── demo/                    # Demo pregeneration
 │   │   ├── calldata_helper.ts       # Encoding & Poseidon
 │   │   ├── orchestrator.ts          # Flow coordinator
 │   │   ├── index.ts                 # Main entry point
+│   │   └── package.json
+│   │
+│   ├── prover-server/               # Express API for ZK Proof generation
+│   │   ├── prover_server.ts         # Main server logic
 │   │   └── package.json
 │   │
 │   └── frontend/                    # Vite + React Client UI
@@ -34,6 +39,7 @@ solvus/
 │   ├── src/main.nr                  # Core ZK circuit logic
 │   └── target/                      # Compiled artifacts & VK
 │
+├── scripts/                         # Global maintenance & keygen scripts
 ├── .agent/                          # Governance, Invariants & AI logs
 └── package.json                     # Root workspace management
 ```
@@ -52,6 +58,8 @@ solvus/
 | **NoirCircuit** | `circuits/src/main.nr` | ZK proof generation logic | `main()` | `prover-server` | 🔴 CRITICAL |
 | **CairoContract** | `cairo/src/contract.cairo` | On-chain badge verification | `issue_badge()` | DeFi protocols | 🔴 CRITICAL |
 | **Frontend** | `packages/frontend/src/App.tsx` | User dashboard & minting flow | React UI | Users | 🟡 MEDIUM |
+| **VesuIntegration** | `packages/core/integrations/vesu_demo.ts` | DeFi lending demo | `checkBorrowingPower()` | Frontend | 🟡 MEDIUM |
+| **DemoPregen** | `packages/core/demo/pregenerate.ts` | Proof caching script | none (standalone) | Developers | ⚪ LOW |
 
 ---
 

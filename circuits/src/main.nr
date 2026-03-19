@@ -1,17 +1,6 @@
 use dep::std;
 
-fn u64_to_be_bytes(val: u64) -> [u8; 8] {
-    let mut out = [0; 8];
-    out[0] = (val >> 56) as u8;
-    out[1] = (val >> 48) as u8;
-    out[2] = (val >> 40) as u8;
-    out[3] = (val >> 32) as u8;
-    out[4] = (val >> 24) as u8;
-    out[5] = (val >> 16) as u8;
-    out[6] = (val >> 8) as u8;
-    out[7] = val as u8;
-    out
-}
+
 
 fn split_to_128bit_fields(bytes: [u8; 32]) -> (Field, Field) {
     let mut x_hi = 0;
@@ -40,7 +29,9 @@ fn main(
     starknet_address: pub Field,
     nonce: pub Field,
     user_sig: [u8; 64],
-    relayer_sig: [u8; 64],
+    relayer_sig_s: Field,
+    relayer_sig_r8_x: Field,
+    relayer_sig_r8_y: Field,
     badge_type: pub u8,
     _tier: u8, // _tier: Cairo enforces tier<->threshold via get_expected_constraints()
     threshold: pub u64,
@@ -52,9 +43,9 @@ fn main(
     nullifier_secret: Field,
     nullifier_hash: pub Field
 ) {
-    // Relayer public key hardcoded (Real secp256k1 keys synced from .env)
-    let relayer_x: [u8; 32] = [0x53, 0xb3, 0xfe, 0xfb, 0xba, 0xe1, 0xb3, 0x24, 0x04, 0x73, 0x1d, 0xd2, 0xbe, 0x6f, 0x5a, 0x37, 0x67, 0x9c, 0x32, 0x99, 0xde, 0xf5, 0xa5, 0x5b, 0xf6, 0x2d, 0x71, 0x42, 0xe1, 0x21, 0x7f, 0xd7];
-    let relayer_y: [u8; 32] = [0x27, 0x2e, 0xe3, 0x47, 0x7f, 0x32, 0x88, 0xa1, 0xd9, 0xde, 0xbf, 0x75, 0x11, 0x4e, 0xcf, 0x70, 0x4d, 0xca, 0x1e, 0x2c, 0x71, 0xa8, 0xa8, 0xb8, 0x83, 0xcc, 0xf5, 0x00, 0xb5, 0xb3, 0x58, 0x4f];
+    // Hardcoded Relayer EdDSA (BabyJubJub) Public Key
+    let relayer_pub_x: Field = 0xbbf872feb02f85ea9e79eb8640dc1f0daa8d641c6043127743ee1bba0042bd8;
+    let relayer_pub_y: Field = 0xb96e3c9bd23d9e416e691de9cc656e1a76175ce8c1fb6905c5e9d385b170f3f;
 
     // STEP 0 - Serialization
     let addr_bytes: [u8; 32] = starknet_address.to_be_bytes::<32>();
@@ -76,15 +67,17 @@ fn main(
     let hashed_msg = std::hash::sha256(std::hash::sha256(full_message));
     assert(std::ecdsa_secp256k1::verify_signature(pubkey_x, pubkey_y, user_sig, hashed_msg));
 
-    // STEP 2 - RELAYER ECDSA
-    let btc_data_bytes = u64_to_be_bytes(btc_data);
-    let timestamp_bytes = u64_to_be_bytes(timestamp);
-    let mut payload = [0; 48];
-    for i in 0..32 { payload[i] = pubkey_x[i]; }
-    for i in 0..8  { payload[32 + i] = btc_data_bytes[i]; }
-    for i in 0..8  { payload[40 + i] = timestamp_bytes[i]; }
-
-    assert(std::ecdsa_secp256k1::verify_signature(relayer_x, relayer_y, relayer_sig, std::hash::sha256(payload)));
+    // STEP 2 - RELAYER VERIFICATION (ZK-Native EdDSA + Poseidon)
+    let (x_hi_r, x_lo_r) = split_to_128bit_fields(pubkey_x);
+    let payload_hash = std::hash::poseidon::bn254::hash_4([
+        x_hi_r, x_lo_r, btc_data as Field, timestamp as Field
+    ]);
+    let is_valid_relayer = dep::eddsa::eddsa_verify::<dep::poseidon::poseidon::PoseidonHasher>(
+        relayer_pub_x, relayer_pub_y,
+        relayer_sig_s, relayer_sig_r8_x, relayer_sig_r8_y,
+        payload_hash
+    );
+    assert(is_valid_relayer);
 
     // STEP 3 - THRESHOLD CHECK
     if is_upper_bound {

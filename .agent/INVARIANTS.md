@@ -22,8 +22,8 @@ hash_4([nullifier_secret, x_hi, x_lo, badge_type])
 bytes[0..16]  → x_hi  (big-endian accumulation)
 bytes[16..32] → x_lo  (big-endian accumulation)
 ```
-- TypeScript: `splitTo128BitFields()` trong `src/calldata_helper.ts`
-- Noir: `split_to_128bit_fields()` trong `circuits/main.nr`
+- TypeScript: `splitTo128BitFields()` trong `packages/core/calldata_helper.ts`
+- Noir: `split_to_128bit_fields()` trong `circuits/src/main.nr`
 - **Cả hai phải cho CÙNG output với cùng input** — test B#3.
 - **Tại sao split:** secp256k1 coord ~256-bit, BN254 prime ~254-bit. x_hi, x_lo đều < 2^128 < BN254_PRIME.
 
@@ -57,6 +57,7 @@ DER format: starts with 0x30  ← REJECTED, throw Error
 - Timestamp phải từ `RelayerResponse` object — đây là giá trị relayer đã ký.
 - Cairo check: `current_block_timestamp - timestamp <= 3600` (1 giờ window).
 - Dùng timestamp khác = signature không cover timestamp đó = proof fail.
+- **⚠️ WARNING:** Hiện tại một số script (`packages/core/relayer/index.ts`, `pregenerate.ts`) có thể vẫn dùng `Date.now()` — đây là VI PHẠM cần được fix trong code để khớp với Invariant này.
 
 ### INV-06: Boolean Operators (Runtime Safety)
 ```
@@ -77,7 +78,7 @@ export const BN254_PRIME =
 export const BN254_PRIME = 0x30644e72e131a029b85045b68181585d2833e84879b9709142e0f853d...n;
 ```
 - Source: EIP-197, circom/snarkjs, Noir stdlib — đã verified.
-- KHÔNG tự tính lại. KHÔNG convert sang hex. Copy nguyên từ `src/shared/utils.ts`.
+- KHÔNG tự tính lại. KHÔNG convert sang hex. Copy nguyên từ `packages/core/shared/utils.ts`.
 
 ---
 
@@ -92,23 +93,18 @@ message = toHex64(BigInt(starknetAddress)) + toHex64(nonce)
 - Bitcoin Signed Message prefix: `0x18` + "Bitcoin Signed Message:\n" + varint `0x80`
 - `0x80` = 128 = varint cho 128-char message (FIXED, không dynamic). Xác nhận B#1.
 
-### INV-09: Relayer Payload Format
-payload[48] = pubkey_x[32] || btc_data[8BE] || timestamp[8BE]
-
-⚠️ **KHÔNG** được thêm vào payload:
-- `badge_type` (là public input, Cairo verify độc lập)
-- `threshold` (là public input, Cairo verify độc lập)
-- bất kỳ field nào khác
-
-**Lý do:** Relayer ký `btc_data` để Noir có thể chứng minh `btc_data >= threshold` một cách trung thực với private data. Ký `threshold` là vô nghĩa — `threshold` đã public.
-
-- `u64ToBigEndian()` dùng `Buffer.alloc(8)` + `writeBigUInt64BE()`.
-- Noir: `u64_to_be_bytes()` với manual bit shift.
+### INV-09: Relayer Payload Format (Poseidon Fields)
+```
+payload_hash = poseidon([x_hi, x_lo, btc_data, timestamp])
+```
+- **FIXED ORDER:** `[x_hi_r, x_lo_r, btc_data as Field, timestamp as Field]`
+- Noir: `std::hash::poseidon::bn254::hash_4`
+- TypeScript: `poseidon([x_hi, x_lo, BigInt(btc_data), BigInt(timestamp)])`
+- **Lý do:** Dùng Poseidon thay vì byte-concatenation giúp tối ưu mạch Noir (ZK-native).
 - **btc_data units:**
   - Type 1 (Whale): Satoshis (u64)
   - Type 2 (Hodler): Days (u64)
   - Type 3 (Stacker): UTXO Count (u64)
-- **Cả hai phải produce identical bytes** cho cùng giá trị u64.
 
 ### INV-10: Relayer Signature Format
 ```

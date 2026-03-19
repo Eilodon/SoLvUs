@@ -8,9 +8,7 @@ starknet = "2.14.0"
 garaga = { git = "https://github.com/keep-starknet-strange/garaga", tag = "v1.0.1" }
 
 [cairo]
-sierra-replace-ids = true
-allow-warnings = true
-inlining-strategy = "avoid"
+sierra-replace-ids = false
 
 [dev-dependencies]
 snforge_std = "0.53.0"
@@ -19,3 +17,4 @@ assert_macros = "2.14.0"
 [[target.starknet-contract]]
 sierra = true
 casm = true
+casm-add-pythonic-hints = true

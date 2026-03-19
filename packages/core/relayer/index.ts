@@ -1,5 +1,4 @@
-import { secp256k1 } from '@noble/curves/secp256k1';
-import { sha256 } from '@noble/hashes/sha256';
+import { buildEddsa, buildPoseidon } from 'circomlibjs';
 import { u64ToBigEndian } from '../shared/utils';
 import { RelayerResponse } from './types';
 
@@ -8,7 +7,7 @@ const xverseApi = {
   getUtxos: async (address: string) => [] as { block_time: number }[],
 };
 
-async function getBtcData(btcAddress: string, badgeType: number): Promise<number> {
+async function getBtcData(btcAddress: string, badgeType: number, timestamp: number): Promise<number> {
   if (badgeType === 1) { // Whale
     const { balance } = await xverseApi.getBalance(btcAddress);
     return balance;
@@ -17,8 +16,7 @@ async function getBtcData(btcAddress: string, badgeType: number): Promise<number
     const utxos = await xverseApi.getUtxos(btcAddress);
     if (utxos.length === 0) return 0;
     const oldest = utxos.reduce((min: number, u: any) => Math.min(min, u.block_time), Infinity);
-    const nowSeconds = Math.floor(Date.now() / 1000);
-    return Math.floor((nowSeconds - oldest) / 86400);
+    return Math.floor((timestamp - oldest) / 86400);
   }
   if (badgeType === 3) { // Stacker
     const utxos = await xverseApi.getUtxos(btcAddress);
@@ -27,33 +25,45 @@ async function getBtcData(btcAddress: string, badgeType: number): Promise<number
   throw new Error(`Unknown badge_type: ${badgeType}`);
 }
 
-/**
- * Main Relayer logic.
- * Accepts private key as argument to avoid env issues in some runtimes.
- */
 export async function fetchRelayerData(
   pubkeyXBytes: Uint8Array,
   btcAddress: string,
   badgeType: number,
-  relayerKey?: string
+  relayerKey?: string,
+  forcedTimestamp?: number
 ): Promise<RelayerResponse> {
-  const privateKey = relayerKey || process.env.RELAYER_PRIVATE_KEY;
-  if (!privateKey) {
-    throw new Error('RELAYER_PRIVATE_KEY is not set.');
-  }
+  const privateKeyHex = (relayerKey || process.env.RELAYER_EDDSA_PRIVATE_KEY || '').replace('0x','');
+  if (!privateKeyHex) throw new Error('RELAYER_EDDSA_PRIVATE_KEY is not set.');
 
-  const btc_data = await getBtcData(btcAddress, badgeType);
-  const timestamp = Math.floor(Date.now() / 1000);
+  const eddsa = await buildEddsa();
+  const poseidon = await buildPoseidon();
 
-  const payload = Buffer.concat([
-    Buffer.from(pubkeyXBytes),
-    u64ToBigEndian(btc_data),
-    u64ToBigEndian(timestamp),
-  ]);
+  // INV-05: Single Source of Truth for Time. 
+  // Relayer originates the time, but can be forced for testing/determinism.
+  const timestamp = forcedTimestamp || Math.floor(Date.now() / 1000);
+  
+  const response: RelayerResponse = {
+    timestamp,
+    btc_data: 0,
+    relayer_sig_s: '',
+    relayer_sig_r8_x: '',
+    relayer_sig_r8_y: '',
+  };
 
-  const relayer_sig = secp256k1
-    .sign(sha256(payload), privateKey)
-    .toCompactRawBytes();
+  response.btc_data = await getBtcData(btcAddress, badgeType, response.timestamp);
 
-  return { btc_data, timestamp, relayer_sig };
+  const x_hi = BigInt('0x' + Buffer.from(pubkeyXBytes.slice(0, 16)).toString('hex'));
+  const x_lo = BigInt('0x' + Buffer.from(pubkeyXBytes.slice(16, 32)).toString('hex'));
+  
+  const payloadHashBuffer = poseidon([x_hi, x_lo, BigInt(response.btc_data), BigInt(response.timestamp)]);
+  const payloadHash = eddsa.F.e(poseidon.F.toObject(payloadHashBuffer));
+
+  const privKey = Buffer.from(privateKeyHex, 'hex');
+  const signature = eddsa.signPoseidon(privKey, payloadHash);
+
+  response.relayer_sig_s = '0x' + BigInt(signature.S).toString(16).padStart(64, '0');
+  response.relayer_sig_r8_x = '0x' + eddsa.F.toObject(signature.R8[0]).toString(16).padStart(64, '0');
+  response.relayer_sig_r8_y = '0x' + eddsa.F.toObject(signature.R8[1]).toString(16).padStart(64, '0');
+
+  return response;
 }

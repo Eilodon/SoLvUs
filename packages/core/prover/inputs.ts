@@ -51,7 +51,9 @@ export async function buildProverInputs(
     pubkey_x:         Array.from(params.pubkeyXBytes),
     pubkey_y:         Array.from(params.pubkeyYBytes),
     user_sig:         Array.from(params.userSig),
-    relayer_sig:      Array.from(params.relayerResponse.relayer_sig),
+    relayer_sig_s:    params.relayerResponse.relayer_sig_s,
+    relayer_sig_r8_x: params.relayerResponse.relayer_sig_r8_x,
+    relayer_sig_r8_y: params.relayerResponse.relayer_sig_r8_y,
     btc_data:         params.relayerResponse.btc_data,
     nullifier_secret: params.nullifierSecretHex,
     
@@ -59,6 +61,7 @@ export async function buildProverInputs(
     starknet_address: toFieldHex(BigInt(params.starknetAddress)),
     nonce:            toFieldHex(params.nonce),
     badge_type:       params.badgeType,
+    _tier:            params.tier,
     threshold:        threshold,
     is_upper_bound:   false, // Default to false per PRD Sprint 0
     timestamp:        params.relayerResponse.timestamp, // USE RELAYER TIMESTAMP (INV-12)

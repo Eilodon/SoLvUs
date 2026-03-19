@@ -16,7 +16,7 @@
 | B#6 — calldata runPhase0Tests 3/3 | ✅ PASS | Eidolon-V | 2026-03-09 |
 | B#7 — Poseidon Noir == circomlibjs | ✅ PASS | Eidolon-V | 2026-03-09 |
 | B#8 — Garaga pub u8 = 1 felt252 | ✅ PASS | Eidolon-V | 2026-03-09 |
-| B#9 — Nullifier determinism ×3 | ✅ PASS | Eidolon-V | 2026-03-09 |
+| B#9 — Nullifier determinism ×3 | 🟡 MOCKED | Eidolon-V | 2026-03-17 (Mocked for Demo) |
 
 > Cập nhật bảng này khi mỗi blocker pass. Status: ⏳ PENDING | ✅ PASS | ❌ FAIL
 
@@ -61,9 +61,8 @@ cd circuits && nargo build
 nargo test  # Chạy all tests
 
 # PROMPT-P1 VERIFY — Payload structure check
-[ ] grep "0u8; 48" circuits/main.nr → có (payload = 48 bytes)
-[ ] grep "btc_data_bytes\[" circuits/main.nr → có (btc_data trong payload)
-[ ] Không có "threshold" hay "badge_type" trong context payload
+[ ] grep "poseidon(\[x_hi, x_lo, btc_data, timestamp\])" circuits/src/main.nr → có
+[ ] Không có "threshold" hay "badge_type" trong context payload signing
 ```
 
 ### B#5 — Garaga pub Field Serialization
@@ -72,10 +71,10 @@ nargo test  # Chạy all tests
 **Tại sao quan trọng:** Nếu Garaga treat Field như [u8;32] thì calldata format sai hoàn toàn
 
 ### B#6 — calldata_helper Tests 3/3
-**Script:** `src/calldata_helper.ts` → `runPhase0Tests()`
+**Script:** `packages/core/calldata_helper.ts` → `runPhase0Tests()`
 ```bash
 npx ts-node -e "
-import { runPhase0Tests } from './src/calldata_helper';
+import { runPhase0Tests } from './packages/core/calldata_helper';
 // Điền relayerPubkeyXHex và rawPubkeyXBytes thực tế
 runPhase0Tests('YOUR_RELAYER_PUBKEY_X_HEX', YOUR_PUBKEY_BYTES).then(console.log);
 "
