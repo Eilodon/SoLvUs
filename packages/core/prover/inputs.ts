@@ -7,13 +7,12 @@ import {
   sha256Hex,
   validateBytesLength,
 } from '../shared/utils';
-import { computeNonce } from './nonce';
 
-export const GROTH16_PUBLIC_INPUT_FIELD_COUNT = 9;
+export const GROTH16_PUBLIC_INPUT_FIELD_COUNT = 10;
 export const GROTH16_PUBLIC_INPUT_FIELD_BYTES = 32;
 export const GROTH16_PUBLIC_INPUTS_TOTAL_BYTES =
   GROTH16_PUBLIC_INPUT_FIELD_COUNT * GROTH16_PUBLIC_INPUT_FIELD_BYTES;
-export const GROTH16_VERIFIER_PUBLIC_INPUT_COUNT = 68;
+export const GROTH16_VERIFIER_PUBLIC_INPUT_COUNT = 69;
 export const GROTH16_VERIFIER_PUBLIC_INPUT_HEADER_BYTES = 12;
 export const GROTH16_VERIFIER_PUBLIC_INPUTS_TOTAL_BYTES =
   GROTH16_VERIFIER_PUBLIC_INPUT_HEADER_BYTES +
@@ -24,24 +23,21 @@ export interface BuildProverInputsParams {
   user_pubkey_y: Hex;
   user_sig: Hex;
   relayer_response: RelayerResponse;
-  nullifier_secret: Hex;
   solana_address: Hex;
   badge_type: BadgeType;
 }
 
 export async function computeNullifierHash(
-  nullifierSecret: Hex,
+  dlcContractId: Hex,
   badgeType: BadgeType,
-  timestamp: number,
-  nonce: Hex,
 ): Promise<Hex> {
-  validateBytesLength(nullifierSecret, 32, 'nullifier_secret');
-  validateBytesLength(nonce, 32, 'nonce');
+  validateBytesLength(dlcContractId, 32, 'dlc_contract_id');
+  const dlcBigInt = BigInt('0x' + dlcContractId);
   const hash = await poseidonHash([
-    BigInt(nullifierSecret),
+    dlcBigInt,
     BigInt(badgeType),
-    BigInt(timestamp),
-    BigInt(nonce),
+    0n,
+    0n,
   ]);
   return fieldToHex32(hash);
 }
@@ -55,29 +51,24 @@ export async function buildProverInputs(params: BuildProverInputsParams): Promis
   validateBytesLength(params.relayer_response.pubkey_y, 32, 'relayer_pubkey_y');
   validateBytesLength(params.solana_address, 32, 'solana_address');
 
-  const nonce = await computeNonce(params.solana_address, params.relayer_response.timestamp);
   const nullifier_hash = await computeNullifierHash(
-    params.nullifier_secret,
+    params.relayer_response.dlc_contract_id,
     params.badge_type,
-    params.relayer_response.timestamp,
-    nonce,
   );
 
   return {
-    nullifier_secret: params.nullifier_secret,
+    dlc_contract_id: params.relayer_response.dlc_contract_id,
     pubkey_x: params.user_pubkey_x,
     pubkey_y: params.user_pubkey_y,
     user_sig: params.user_sig,
     btc_data: params.relayer_response.btc_data,
     relayer_sig: params.relayer_response.signature,
     solana_address: params.solana_address,
-    nonce,
     relayer_pubkey_x: params.relayer_response.pubkey_x,
     relayer_pubkey_y: params.relayer_response.pubkey_y,
     badge_type: params.badge_type,
     threshold: getThresholdForBadge(params.badge_type),
     is_upper_bound: false,
-    timestamp: params.relayer_response.timestamp,
     nullifier_hash,
   };
 }
@@ -85,13 +76,12 @@ export async function buildProverInputs(params: BuildProverInputsParams): Promis
 export function collectPublicInputs(inputs: ProverInputs): Hex[] {
   return [
     inputs.solana_address,
-    inputs.nonce,
+    inputs.dlc_contract_id,
     inputs.relayer_pubkey_x,
     inputs.relayer_pubkey_y,
     fieldToHex32(BigInt(inputs.badge_type)),
     fieldToHex32(BigInt(inputs.threshold)),
     fieldToHex32(inputs.is_upper_bound ? 1n : 0n),
-    fieldToHex32(BigInt(inputs.timestamp)),
     inputs.nullifier_hash,
   ];
 }
@@ -138,6 +128,7 @@ export function collectVerifierPublicInputs(inputs: ProverInputs): Hex[] {
   const solanaAddressBytes = hexToBytes(inputs.solana_address);
   const relayerBytesX = hexToBytes(inputs.relayer_pubkey_x);
   const relayerBytesY = hexToBytes(inputs.relayer_pubkey_y);
+  const dlcContractIdBytes = hexToBytes(inputs.dlc_contract_id);
   const fields: Hex[] = [];
 
   // sol_hi: first 16 bytes of solana_address as Field
@@ -156,6 +147,11 @@ export function collectVerifierPublicInputs(inputs: ProverInputs): Hex[] {
   // relayer_pubkey_y: 32 bytes as 32 Fields
   for (let i = 0; i < 32; i++) {
     fields.push(fieldToHex32(BigInt(relayerBytesY[i])));
+  }
+
+  // dlc_contract_id: 32 bytes as 32 Fields
+  for (let i = 0; i < 32; i++) {
+    fields.push(fieldToHex32(BigInt(dlcContractIdBytes[i])));
   }
 
   fields.push(inputs.nullifier_hash);

@@ -1,0 +1,67 @@
+name: Build and Verify Circuit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'circuits/**'
+  pull_request:
+    paths:
+      - 'circuits/**'
+
+jobs:
+  build-circuit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Noir toolchain
+        uses: noir-lang/noir-setup@v1
+        with:
+          version: 1.0.0-beta.18
+
+      - name: Build circuit
+        run: |
+          cd circuits
+          nargo build
+
+      - name: Generate verification key
+        run: |
+          cd circuits
+          nargo info --output-json > target/circuit_info.json
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: circuit-artifacts
+          path: |
+            circuits/target/*.json
+            circuits/target/*.vk
+            circuits/target/*.pk
+
+  verify-circuit:
+    needs: build-circuit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Noir toolchain
+        uses: noir-lang/noir-setup@v1
+        with:
+          version: 1.0.0-beta.18
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: circuit-artifacts
+          path: circuits/target/
+
+      - name: Verify circuit
+        run: |
+          cd circuits
+          nargo verify
+
+      - name: Generate verifier Rust code
+        run: |
+          cd circuits
+          nargo codegen-verifier --output-dir ../solana/programs/groth16_verifier/src

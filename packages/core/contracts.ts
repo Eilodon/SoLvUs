@@ -38,27 +38,25 @@ export enum TransactionStatus {
 
 export interface RelayerResponse {
   btc_data: number;
-  timestamp: number;
+  dlc_contract_id: Hex;
   pubkey_x: Hex;
   pubkey_y: Hex;
   signature: Hex;
 }
 
 export interface ProverInputs {
-  nullifier_secret: Hex;
+  dlc_contract_id: Hex;
   pubkey_x: Hex;
   pubkey_y: Hex;
   user_sig: Hex;
   btc_data: number;
   relayer_sig: Hex;
   solana_address: Hex;
-  nonce: Hex;
   relayer_pubkey_x: Hex;
   relayer_pubkey_y: Hex;
   badge_type: BadgeType;
   threshold: number;
   is_upper_bound: boolean;
-  timestamp: number;
   nullifier_hash: Hex;
 }
 

@@ -1,10 +1,9 @@
 import { randomBytes, bytesToHex } from '@noble/hashes/utils';
 import { sha512 } from '@noble/hashes/sha512';
 import { mod } from '@noble/curves/abstract/modular';
-import { computeNullifierSecret } from '../identity/nullifier_secret';
 import { computeRelayerCommitment } from '../relayer/index';
 import { BadgeType, Hex, BN254_PRIME } from '../contracts';
-import { fieldToHex32, hexToBytes } from '../shared/utils';
+import { fieldToHex32, hexToBytes, poseidonHash } from '../shared/utils';
 
 function generateRandomHex(length: number): Hex {
   return bytesToHex(randomBytes(length)) as Hex;
@@ -14,32 +13,18 @@ function generateRandomSignature(): Hex {
   return generateRandomHex(64);
 }
 
-function generateValidUserSignature(): Hex {
-  const msg = 'Solvus Identity ' + Date.now();
-  const msgBytes = new TextEncoder().encode(msg);
-  return bytesToHex(randomBytes(64)) as Hex;
-}
-
-function computeNullifierHash(
-  nullifierSecret: Hex,
-  badgeType: BadgeType,
-  timestamp: number,
-  nonce: bigint
-): bigint {
-  const secretBytes = hexToBytes(nullifierSecret);
-  const hashInput = new Uint8Array(secretBytes.length + 1 + 4 + 8);
-  hashInput.set(secretBytes, 0);
-  hashInput[secretBytes.length] = badgeType;
-  const timestampBytes = new Uint8Array(4);
-  new DataView(timestampBytes.buffer).setUint32(0, timestamp, false);
-  hashInput.set(timestampBytes, secretBytes.length + 1);
-  const nonceBytes = new Uint8Array(8);
-  new DataView(nonceBytes.buffer).setBigUint64(0, nonce, false);
-  hashInput.set(nonceBytes, secretBytes.length + 5);
-  
-  const hashHex = sha512(hashInput);
-  const hashInt = BigInt('0x' + bytesToHex(hashHex));
-  return mod(hashInt, BN254_PRIME);
+async function computeNullifierHash(
+  dlcContractId: Hex,
+  badgeType: BadgeType
+): Promise<bigint> {
+  const dlcBigInt = BigInt('0x' + dlcContractId);
+  const hash = await poseidonHash([
+    dlcBigInt,
+    BigInt(badgeType),
+    0n,
+    0n,
+  ]);
+  return hash;
 }
 
 interface FuzzResult {
@@ -57,32 +42,27 @@ async function runFuzzing(iterations: number = 1000): Promise<FuzzResult[]> {
   console.log(`   Iterations: ${iterations}`);
   console.log('='.repeat(80));
 
-  const validUserSig = generateValidUserSignature();
-  const validNullifierSecret = computeNullifierSecret(validUserSig);
-  const validTimestamp = Math.floor(Date.now() / 1000);
+  const validDlcContractId = generateRandomHex(32);
   const validBtcData = 100_000_000n;
   const validSolanaAddress = generateRandomHex(32);
   const validRelayerPubkeyX = generateRandomHex(32);
   const validRelayerPubkeyY = generateRandomHex(32);
   const validRelayerSig = generateRandomSignature();
-  const validNonce = 1n;
   const validBadgeType = BadgeType.Whale;
   const validThreshold = 50_000_000n;
 
   const validCommitment = await computeRelayerCommitment(
     validRelayerPubkeyX,
     Number(validBtcData),
-    validTimestamp
+    validDlcContractId
   );
-  const validNullifierHash = computeNullifierHash(
-    validNullifierSecret,
-    validBadgeType,
-    validTimestamp,
-    validNonce
+  const validNullifierHash = await computeNullifierHash(
+    validDlcContractId,
+    validBadgeType
   );
 
   console.log('\n✅ Valid Baseline Created:');
-  console.log(`   - nullifier_secret: ${validNullifierSecret.slice(0, 16)}...`);
+  console.log(`   - dlc_contract_id: ${validDlcContractId.slice(0, 16)}...`);
   console.log(`   - btc_data: ${validBtcData}`);
   console.log(`   - commitment: ${validCommitment.slice(0, 16)}...`);
   console.log(`   - nullifier_hash: ${validNullifierHash.toString(16).slice(0, 16)}...`);
@@ -166,13 +146,10 @@ async function runFuzzing(iterations: number = 1000): Promise<FuzzResult[]> {
   let vector3Failures = 0;
   for (let i = 0; i < iterations; i++) {
     const randomHex = generateRandomHex(32);
-    const randomNullifierSecret = BigInt('0x' + randomHex.slice(0, 16));
     
-    const fakeNullifierHash = computeNullifierHash(
+    const fakeNullifierHash = await computeNullifierHash(
       randomHex as Hex,
-      validBadgeType,
-      validTimestamp,
-      validNonce
+      validBadgeType
     );
     
     if (fakeNullifierHash === validNullifierHash) {
@@ -180,7 +157,7 @@ async function runFuzzing(iterations: number = 1000): Promise<FuzzResult[]> {
       results.push({
         vector: 'Nullifier Collision',
         iteration: i + 1,
-        inputs: { nullifier_secret: 'random' },
+        inputs: { dlc_contract_id: 'random' },
         result: 'FAIL',
         details: 'CRITICAL: Nullifier collision detected!'
       });
@@ -188,7 +165,7 @@ async function runFuzzing(iterations: number = 1000): Promise<FuzzResult[]> {
       results.push({
         vector: 'Nullifier Collision',
         iteration: i + 1,
-        inputs: { nullifier_secret: 'random' },
+        inputs: { dlc_contract_id: 'random' },
         result: 'PASS',
         details: `Different nullifier_hash correctly generated`
       });

@@ -16,20 +16,15 @@ export interface RelayerSigner {
   signCommitment(commitment: Hex): Promise<Hex>;
 }
 
-import { RelayerStateStore } from './state';
-
 export interface FetchRelayerDataParams {
   btcAddress: string;
   badgeType: BadgeType;
   userPubkeyX: Hex;
   solanaAddress: Hex;
-  timestamp: number;
-  dlcContractId?: Hex;  // Optional DLC contract ID for verification
+  dlcContractId: Hex;
   indexer: BitcoinIndexer;
   signer: RelayerSigner;
-  stateStore?: RelayerStateStore;
   now?: number;
-  allowReuse?: boolean;
 }
 
 export type { RelayerResponse };

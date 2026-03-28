@@ -37,16 +37,14 @@ fn main(
     solana_address: [u8; 32],
     sol_hi: pub Field,
     sol_lo: pub Field,
-    nonce: Field,
     relayer_pubkey_x: pub [u8; 32],
     relayer_pubkey_y: pub [u8; 32],
     badge_type: u8,
     threshold: u64,
     is_upper_bound: bool,
-    timestamp: u64,
+    dlc_contract_id: pub Field,
     nullifier_hash: pub Field,
 
-    nullifier_secret: Field,
     pubkey_x: [u8; 32],
     pubkey_y: [u8; 32],
     user_sig: [u8; 64],
@@ -60,19 +58,7 @@ fn main(
     let (computed_sol_hi, computed_sol_lo) = split_to_128bit_fields(solana_address);
     assert(computed_sol_hi == sol_hi);
     assert(computed_sol_lo == sol_lo);
-    let solana_address_field = bytes32_to_field(solana_address);
-    let minute_bucket = (timestamp / 60) as Field;
-    let expected_nonce = legacy_poseidon::bn254::hash_4([
-        solana_address_field,
-        minute_bucket,
-        0,
-        0,
-    ]);
-    assert(expected_nonce == nonce);
-
-    let nonce_bytes: [u8; 32] = nonce.to_be_bytes::<32>();
     let address_hex = bytes_to_hex64(solana_address);
-    let nonce_hex = bytes_to_hex64(nonce_bytes);
 
     let bsm_prefix: [u8; 26] = [
         0x18, 0x42, 0x69, 0x74, 0x63, 0x6f, 0x69, 0x6e, 0x20, 0x53, 0x69, 0x67, 0x6e, 0x65, 0x64, 0x20,
@@ -82,7 +68,7 @@ fn main(
     let mut full_message = [0; 154];
     for i in 0..26 { full_message[i] = bsm_prefix[i]; }
     for i in 0..64 { full_message[26 + i] = address_hex[i]; }
-    for i in 0..64 { full_message[90 + i] = nonce_hex[i]; }
+    for i in 0..64 { full_message[90 + i] = address_hex[i]; }
 
     let user_message_hash = sha256::digest(sha256::digest(full_message));
     assert(verify_signature(pubkey_x, pubkey_y, user_sig, user_message_hash));
@@ -92,7 +78,7 @@ fn main(
         x_hi,
         x_lo,
         btc_data as Field,
-        timestamp as Field,
+        dlc_contract_id,
     ]);
     let relayer_message_hash = relayer_payload_hash.to_be_bytes::<32>();
     assert(verify_signature(
@@ -109,10 +95,10 @@ fn main(
     }
 
     let expected_nullifier_hash = legacy_poseidon::bn254::hash_4([
-        nullifier_secret,
+        dlc_contract_id,
         badge_type as Field,
-        timestamp as Field,
-        nonce,
+        0,
+        0,
     ]);
     assert(expected_nullifier_hash == nullifier_hash);
 }

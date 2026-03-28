@@ -3,6 +3,7 @@ use anchor_lang::solana_program::instruction::Instruction;
 use anchor_lang::solana_program::program::invoke;
 use anchor_lang::solana_program::pubkey;
 use anchor_spl::token::{self, Burn, Mint, MintTo, Token, TokenAccount};
+use pyth_sdk_solana::{load_price_feed_from_account_info, PriceFeed, PriceStatus};
 
 declare_id!("Cik3PiifeUrKrWcAFsHM5R7ckQVkWAc9M9THrXVfanVR");
 
@@ -12,14 +13,15 @@ const PROTOCOL_CONFIG_SEED: &[u8] = b"protocol_config";
 const VAULT_SEED: &[u8] = b"vault";
 const DLC_CLOSE_TIMEOUT: i64 = 3600;
 const GRACE_PERIOD_DURATION: i64 = 3600;
-const L1_PREEMPTION_WINDOW: i64 = 86400; // 24 hours - window for liquidator to preempt before L1 refund
-const MAX_MINT_ZKUSD_AMOUNT: u64 = 1_000_000_000; // 1M zkUSD max per transaction
-const MAX_LIQUIDATOR_REWARD_BPS: u64 = 1000; // 10% max reward (in basis points)
+const L1_PREEMPTION_WINDOW: i64 = 86400;
+const MAX_MINT_ZKUSD_AMOUNT: u64 = 1_000_000_000;
+const MAX_LIQUIDATOR_REWARD_BPS: u64 = 1000;
 const SPL_TOKEN_PROGRAM_ID: Pubkey = pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
-const GROTH16_PUBLIC_INPUT_FIELD_COUNT: usize = 68;
+const GROTH16_PUBLIC_INPUT_FIELD_COUNT: usize = 69;
 const GROTH16_PUBLIC_INPUT_HEADER_BYTES: usize = 12;
 const GROTH16_PUBLIC_INPUT_BYTES: usize =
     GROTH16_PUBLIC_INPUT_HEADER_BYTES + GROTH16_PUBLIC_INPUT_FIELD_COUNT * 32;
+const PYTH_STALENESS_SECONDS: i64 = 60;
 
 #[program]
 pub mod solvus {
@@ -121,15 +123,19 @@ pub mod solvus {
         require!(zkusd_amount > 0, SolvusError::InvalidAmount);
         require!(zkusd_amount <= MAX_MINT_ZKUSD_AMOUNT, SolvusError::InvalidAmount);
         require!(!proof.is_empty(), SolvusError::InvalidProof);
-        let btc_price_data = ctx.accounts.oracle_price_feed.try_borrow_data()?;
-        let btc_price = u64::from_le_bytes(
-            btc_price_data[0..8]
-                .try_into()
-                .map_err(|_| error!(SolvusError::OraclePriceFeedNotConfigured))?,
-        );
+        
+        // Use Pyth SDK for safe price reading with staleness check
+        let price_feed = load_price_feed_from_account_info(&ctx.accounts.oracle_price_feed)
+            .map_err(|_| error!(SolvusError::OraclePriceFeedNotConfigured))?;
+        let clock = Clock::get()?;
+        let price = price_feed
+            .get_price_no_older_than(clock.unix_timestamp, PYTH_STALENESS_SECONDS)
+            .ok_or(SolvusError::StaleOraclePrice)?;
+        require!(price.status == PriceStatus::Trading, SolvusError::InvalidOraclePrice);
+        let btc_price = price.val as u64;
         require!(btc_price > 0, SolvusError::InvalidOraclePrice);
 
-        let btc_data = assert_canonical_public_inputs(
+        let (btc_data, dlc_contract_id) = assert_canonical_public_inputs(
             &nullifier_hash,
             &public_inputs,
             &ctx.accounts.protocol_config.authorized_relayer_pubkey_x,
@@ -162,8 +168,10 @@ pub mod solvus {
             SolvusError::InvalidVerifierProgram
         );
 
-        // Skip verification in dev mode (when skip_verification is set)
-        if !ctx.accounts.protocol_config.skip_verification {
+        // Verify ZK proof - always required on mainnet
+        // Only bypassable via compile-time feature flag for devnet
+        #[cfg(not(feature = "devnet"))]
+        {
             verify_groth16_proof(
                 &ctx.accounts.verifier_program.to_account_info(),
                 proof.clone(),
@@ -178,6 +186,7 @@ pub mod solvus {
             vault.collateral_btc = btc_data;
             vault.zkusd_minted = 0;
             vault.status = VaultStatus::Initialized as u8;
+            vault.dlc_contract_id = Some(dlc_contract_id);
         } else {
             vault.collateral_btc = vault
                 .collateral_btc
@@ -262,13 +271,15 @@ pub mod solvus {
 
         // If burning all zkusd, skip collateral check
         if remaining_zkusd > 0 {
-            // Get BTC price for collateral validation
-            let btc_price_data = ctx.accounts.oracle_price_feed.try_borrow_data()?;
-            let btc_price = u64::from_le_bytes(
-                btc_price_data[0..8]
-                    .try_into()
-                    .map_err(|_| error!(SolvusError::OraclePriceFeedNotConfigured))?,
-            );
+            // Use Pyth SDK for safe price reading with staleness check
+            let price_feed = load_price_feed_from_account_info(&ctx.accounts.oracle_price_feed)
+                .map_err(|_| error!(SolvusError::OraclePriceFeedNotConfigured))?;
+            let clock = Clock::get()?;
+            let price = price_feed
+                .get_price_no_older_than(clock.unix_timestamp, PYTH_STALENESS_SECONDS)
+                .ok_or(SolvusError::StaleOraclePrice)?;
+            require!(price.status == PriceStatus::Trading, SolvusError::InvalidOraclePrice);
+            let btc_price = price.val as u64;
             require!(btc_price > 0, SolvusError::InvalidOraclePrice);
 
             // Check remaining collateral >= 150% of remaining zkusd
@@ -449,7 +460,7 @@ fn assert_canonical_public_inputs(
     authorized_relayer_x: &[u8; 32],
     authorized_relayer_y: &[u8; 32],
     owner_pubkey: &Pubkey,
-) -> Result<u64> {
+) -> Result<(u64, [u8; 32])> {
     require!(
         public_inputs.len() == GROTH16_PUBLIC_INPUT_BYTES,
         SolvusError::InvalidPublicInputs
@@ -505,22 +516,26 @@ fn assert_canonical_public_inputs(
     require!(private_input_count == 0, SolvusError::InvalidPublicInputs);
     require!(entry_count == public_input_count, SolvusError::InvalidPublicInputs);
 
-    let nullifier_start = GROTH16_PUBLIC_INPUT_HEADER_BYTES + 66 * 32;
+    let nullifier_start = GROTH16_PUBLIC_INPUT_HEADER_BYTES + 67 * 32;
     let nullifier_end = nullifier_start + 32;
     require!(
         &public_inputs[nullifier_start..nullifier_end] == nullifier_hash.as_ref(),
         SolvusError::PublicInputsNullifierMismatch
     );
 
+    // Extract dlc_contract_id (Field at index 66, before nullifier_hash)
+    let dlc_contract_id_start = GROTH16_PUBLIC_INPUT_HEADER_BYTES + 66 * 32;
+    let mut dlc_contract_id = [0u8; 32];
+    dlc_contract_id.copy_from_slice(&public_inputs[dlc_contract_id_start..dlc_contract_id_start + 32]);
+
+    // Extract btc_data (last 8 bytes, at index 68)
     let mut btc_data_bytes = [0u8; 8];
     btc_data_bytes.copy_from_slice(
         &public_inputs[(GROTH16_PUBLIC_INPUT_BYTES - 8)..GROTH16_PUBLIC_INPUT_BYTES],
     );
     let btc_data = u64::from_be_bytes(btc_data_bytes);
 
-    // Dynamic collateral check removed - now handled in mint_zkusd with dynamic oracle price
-
-    Ok(btc_data)
+    Ok((btc_data, dlc_contract_id))
 }
 
 fn verify_groth16_proof(
@@ -693,11 +708,10 @@ pub struct ProtocolConfig {
     pub authorized_relayer_pubkey_x: [u8; 32],
     pub authorized_relayer_pubkey_y: [u8; 32],
     pub updated_at: i64,
-    pub skip_verification: bool, // Dev mode only: skip ZK proof verification
 }
 
 impl ProtocolConfig {
-    pub const LEN: usize = 32 + 32 + 32 + 32 + 32 + 32 + 8 + 1;
+    pub const LEN: usize = 32 + 32 + 32 + 32 + 32 + 32 + 8;
 }
 
 #[account]
@@ -829,4 +843,6 @@ pub enum SolvusError {
     AddressSanctioned,
     #[msg("Invalid oracle price")]
     InvalidOraclePrice,
+    #[msg("Oracle price is stale")]
+    StaleOraclePrice,
 }
