@@ -46,6 +46,7 @@ export interface RelayerResponse {
 
 export interface ProverInputs {
   dlc_contract_id: Hex;
+  nullifier_secret: Hex;
   pubkey_x: Hex;
   pubkey_y: Hex;
   user_sig: Hex;
