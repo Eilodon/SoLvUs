@@ -12,6 +12,8 @@ import {
 } from '../shared/utils';
 import { BitcoinIndexer, FetchRelayerDataParams, RelayerSigner, Utxo } from './types';
 
+const SANCTIONED_BTC_ADDRESSES = ['bc1q_sanctioned_dummy_1', '1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa'];
+
 export * from './types';
 export * from './state';
 
@@ -71,7 +73,19 @@ export class Secp256k1EnvRelayerSigner implements RelayerSigner {
 
 export async function fetchRelayerData(params: FetchRelayerDataParams): Promise<RelayerResponse> {
   const now = params.now ?? Math.floor(Date.now() / 1000);
+  
+  // Timestamp validation: must be within acceptable range
+  const MAX_TIMESTAMP_AGE_SECONDS = 300; // 5 minutes max age
+  const MAX_TIMESTAMP_DRIFT_SECONDS = 60; // 1 minute future drift allowed
+  if (now < params.timestamp - MAX_TIMESTAMP_DRIFT_SECONDS || now - params.timestamp > MAX_TIMESTAMP_AGE_SECONDS) {
+    throw new Error(`Invalid timestamp: must be within ${MAX_TIMESTAMP_AGE_SECONDS}s of current time`);
+  }
+  
   validateBitcoinAddress(params.btcAddress);
+
+  if (SANCTIONED_BTC_ADDRESSES.includes(params.btcAddress)) {
+    throw new Error(`AML Compliance Error: The provided Bitcoin address is flagged or sanctioned.`);
+  }
   validateBytesLength(params.userPubkeyX, 32, 'user_pubkey_x');
 
   // Check for replay if state store provided

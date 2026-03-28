@@ -13,7 +13,7 @@ export const GROTH16_PUBLIC_INPUT_FIELD_COUNT = 9;
 export const GROTH16_PUBLIC_INPUT_FIELD_BYTES = 32;
 export const GROTH16_PUBLIC_INPUTS_TOTAL_BYTES =
   GROTH16_PUBLIC_INPUT_FIELD_COUNT * GROTH16_PUBLIC_INPUT_FIELD_BYTES;
-export const GROTH16_VERIFIER_PUBLIC_INPUT_COUNT = 66;
+export const GROTH16_VERIFIER_PUBLIC_INPUT_COUNT = 68;
 export const GROTH16_VERIFIER_PUBLIC_INPUT_HEADER_BYTES = 12;
 export const GROTH16_VERIFIER_PUBLIC_INPUTS_TOTAL_BYTES =
   GROTH16_VERIFIER_PUBLIC_INPUT_HEADER_BYTES +
@@ -135,15 +135,29 @@ function encodeVerifierWitnessHeader(publicInputCount: number): Buffer {
 }
 
 export function collectVerifierPublicInputs(inputs: ProverInputs): Hex[] {
-  const bytesX = hexToBytes(inputs.relayer_pubkey_x);
-  const bytesY = hexToBytes(inputs.relayer_pubkey_y);
+  const solanaAddressBytes = hexToBytes(inputs.solana_address);
+  const relayerBytesX = hexToBytes(inputs.relayer_pubkey_x);
+  const relayerBytesY = hexToBytes(inputs.relayer_pubkey_y);
   const fields: Hex[] = [];
-  for (let i = 0; i < 32; i++) {
-    fields.push(fieldToHex32(BigInt(bytesX[i])));
+
+  // sol_hi: first 16 bytes of solana_address as Field
+  for (let i = 0; i < 16; i++) {
+    fields.push(fieldToHex32(BigInt(solanaAddressBytes[i])));
   }
-  for (let i = 0; i < 32; i++) {
-    fields.push(fieldToHex32(BigInt(bytesY[i])));
+  // sol_lo: last 16 bytes of solana_address as Field
+  for (let i = 16; i < 32; i++) {
+    fields.push(fieldToHex32(BigInt(solanaAddressBytes[i])));
   }
+
+  // relayer_pubkey_x: 32 bytes as 32 Fields
+  for (let i = 0; i < 32; i++) {
+    fields.push(fieldToHex32(BigInt(relayerBytesX[i])));
+  }
+  // relayer_pubkey_y: 32 bytes as 32 Fields
+  for (let i = 0; i < 32; i++) {
+    fields.push(fieldToHex32(BigInt(relayerBytesY[i])));
+  }
+
   fields.push(inputs.nullifier_hash);
   fields.push(fieldToHex32(BigInt(inputs.btc_data)));
   return fields;

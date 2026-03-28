@@ -35,6 +35,8 @@ fn bytes32_to_field(bytes: [u8; 32]) -> Field {
 
 fn main(
     solana_address: [u8; 32],
+    sol_hi: pub Field,
+    sol_lo: pub Field,
     nonce: Field,
     relayer_pubkey_x: pub [u8; 32],
     relayer_pubkey_y: pub [u8; 32],
@@ -51,6 +53,13 @@ fn main(
     btc_data: pub u64,
     relayer_sig: [u8; 64],
 ) {
+    // Badge type validation: 1=Whale, 2=Hodler, 3=Stacker
+    assert(badge_type >= 1);
+    assert(badge_type <= 3);
+
+    let (computed_sol_hi, computed_sol_lo) = split_to_128bit_fields(solana_address);
+    assert(computed_sol_hi == sol_hi);
+    assert(computed_sol_lo == sol_lo);
     let solana_address_field = bytes32_to_field(solana_address);
     let minute_bucket = (timestamp / 60) as Field;
     let expected_nonce = legacy_poseidon::bn254::hash_4([

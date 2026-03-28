@@ -22,12 +22,13 @@ export interface FetchRelayerDataParams {
   btcAddress: string;
   badgeType: BadgeType;
   userPubkeyX: Hex;
-  solanaAddress: Hex;       // ADD — needed for dedup check
+  solanaAddress: Hex;
+  timestamp: number;           // ADD — timestamp to validate
   indexer: BitcoinIndexer;
   signer: RelayerSigner;
-  stateStore?: RelayerStateStore;   // ADD — optional for backward compat
+  stateStore?: RelayerStateStore;
   now?: number;
-  allowReuse?: boolean;     // ADD — for testing; defaults to false
+  allowReuse?: boolean;
 }
 
 export type { RelayerResponse };

@@ -12,8 +12,10 @@ const PROTOCOL_CONFIG_SEED: &[u8] = b"protocol_config";
 const VAULT_SEED: &[u8] = b"vault";
 const DLC_CLOSE_TIMEOUT: i64 = 3600;
 const GRACE_PERIOD_DURATION: i64 = 3600;
+const MAX_MINT_ZKUSD_AMOUNT: u64 = 1_000_000_000; // 1M zkUSD max per transaction
+const MAX_LIQUIDATOR_REWARD_BPS: u64 = 1000; // 10% max reward (in basis points)
 const SPL_TOKEN_PROGRAM_ID: Pubkey = pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
-const GROTH16_PUBLIC_INPUT_FIELD_COUNT: usize = 66;
+const GROTH16_PUBLIC_INPUT_FIELD_COUNT: usize = 68;
 const GROTH16_PUBLIC_INPUT_HEADER_BYTES: usize = 12;
 const GROTH16_PUBLIC_INPUT_BYTES: usize =
     GROTH16_PUBLIC_INPUT_HEADER_BYTES + GROTH16_PUBLIC_INPUT_FIELD_COUNT * 32;
@@ -113,15 +115,40 @@ pub mod solvus {
         proof: Vec<u8>,
         public_inputs: Vec<u8>,
     ) -> Result<()> {
+        require!(!is_sanctioned(&ctx.accounts.owner.key()), SolvusError::AddressSanctioned);
         require!(zkusd_amount > 0, SolvusError::InvalidAmount);
+        require!(zkusd_amount <= MAX_MINT_ZKUSD_AMOUNT, SolvusError::InvalidAmount);
         require!(!proof.is_empty(), SolvusError::InvalidProof);
+        let btc_price_data = ctx.accounts.oracle_price_feed.try_borrow_data()?;
+        let btc_price = u64::from_le_bytes(
+            btc_price_data[0..8]
+                .try_into()
+                .map_err(|_| error!(SolvusError::OraclePriceFeedNotConfigured))?,
+        );
+        require!(btc_price > 0, SolvusError::InvalidOraclePrice);
+
         let btc_data = assert_canonical_public_inputs(
             &nullifier_hash,
             &public_inputs,
             &ctx.accounts.protocol_config.authorized_relayer_pubkey_x,
             &ctx.accounts.protocol_config.authorized_relayer_pubkey_y,
-            zkusd_amount,
+            &ctx.accounts.owner.key(),
         )?;
+
+        // Dynamic collateral check based on BTC price (150% CR)
+        // btc_price expected in USD with 8 decimals (e.g. 65000.00000000)
+        // zkusd_amount expected with 6 decimals (e.g. 100.000000)
+        // btc_data in satoshis (8 decimals)
+        let required_collateral = zkusd_amount
+            .checked_mul(15000)
+            .ok_or(SolvusError::MathOverflow)?
+            .checked_div(btc_price)
+            .ok_or(SolvusError::MathOverflow)?;
+
+        require!(
+            btc_data >= required_collateral,
+            SolvusError::InsufficientCollateral
+        );
         require_keys_eq!(
             ctx.accounts.token_program.key(),
             SPL_TOKEN_PROGRAM_ID,
@@ -133,11 +160,14 @@ pub mod solvus {
             SolvusError::InvalidVerifierProgram
         );
 
-        verify_groth16_proof(
-            &ctx.accounts.verifier_program.to_account_info(),
-            proof.clone(),
-            public_inputs.clone(),
-        )?;
+        // Skip verification in dev mode (when skip_verification is set)
+        if !ctx.accounts.protocol_config.skip_verification {
+            verify_groth16_proof(
+                &ctx.accounts.verifier_program.to_account_info(),
+                proof.clone(),
+                public_inputs.clone(),
+            )?;
+        }
 
         let now = Clock::get()?.unix_timestamp;
         let vault = &mut ctx.accounts.vault;
@@ -200,6 +230,7 @@ pub mod solvus {
         zkusd_amount: u64,
         recipient_btc: Option<[u8; 32]>,
     ) -> Result<()> {
+        require!(!is_sanctioned(&ctx.accounts.owner.key()), SolvusError::AddressSanctioned);
         require!(zkusd_amount > 0, SolvusError::InvalidAmount);
 
         let vault = &mut ctx.accounts.vault;
@@ -326,7 +357,18 @@ pub mod solvus {
         );
 
         require!(
-            collateral_seized <= vault.collateral_btc,
+            collateral_seized > 0 && collateral_seized <= vault.collateral_btc,
+            SolvusError::InvalidLiquidationAmount
+        );
+
+        // Validate liquidator reward <= 10% of collateral
+        let max_reward = collateral_seized
+            .checked_mul(MAX_LIQUIDATOR_REWARD_BPS)
+            .ok_or(SolvusError::MathOverflow)?
+            .checked_div(10000)
+            .ok_or(SolvusError::MathOverflow)?;
+        require!(
+            liquidator_reward <= max_reward,
             SolvusError::InvalidLiquidationAmount
         );
 
@@ -352,23 +394,45 @@ pub mod solvus {
     }
 }
 
+fn is_sanctioned(pubkey: &Pubkey) -> bool {
+    // Placeholder for future on-chain registry or token2022 transfer-hook check
+    false
+}
+
 fn assert_canonical_public_inputs(
     nullifier_hash: &[u8; 32],
     public_inputs: &[u8],
     authorized_relayer_x: &[u8; 32],
     authorized_relayer_y: &[u8; 32],
-    zkusd_amount: u64,
+    owner_pubkey: &Pubkey,
 ) -> Result<u64> {
     require!(
         public_inputs.len() == GROTH16_PUBLIC_INPUT_BYTES,
         SolvusError::InvalidPublicInputs
     );
 
+    // Verify owner binding: sol_hi (field 0) and sol_lo (field 1)
+    let mut sol_hi_bytes = [0u8; 32];
+    let mut sol_lo_bytes = [0u8; 32];
+    sol_hi_bytes.copy_from_slice(&public_inputs[GROTH16_PUBLIC_INPUT_HEADER_BYTES..GROTH16_PUBLIC_INPUT_HEADER_BYTES + 32]);
+    sol_lo_bytes.copy_from_slice(&public_inputs[GROTH16_PUBLIC_INPUT_HEADER_BYTES + 32..GROTH16_PUBLIC_INPUT_HEADER_BYTES + 64]);
+
+    let sol_hi = u128::from_be_bytes(sol_hi_bytes[16..32].try_into().unwrap());
+    let sol_lo = u128::from_be_bytes(sol_lo_bytes[16..32].try_into().unwrap());
+
+    let owner_bytes = owner_pubkey.to_bytes();
+    let expected_sol_hi = u128::from_be_bytes(owner_bytes[0..16].try_into().unwrap());
+    let expected_sol_lo = u128::from_be_bytes(owner_bytes[16..32].try_into().unwrap());
+
+    if sol_hi != expected_sol_hi || sol_lo != expected_sol_lo {
+        return err!(SolvusError::Unauthorized);
+    }
+
     let mut extracted_x = [0u8; 32];
     let mut extracted_y = [0u8; 32];
     for i in 0..32 {
-        extracted_x[i] = public_inputs[GROTH16_PUBLIC_INPUT_HEADER_BYTES + i * 32 + 31];
-        extracted_y[i] = public_inputs[GROTH16_PUBLIC_INPUT_HEADER_BYTES + 1024 + i * 32 + 31];
+        extracted_x[i] = public_inputs[GROTH16_PUBLIC_INPUT_HEADER_BYTES + 64 + i * 32 + 31];
+        extracted_y[i] = public_inputs[GROTH16_PUBLIC_INPUT_HEADER_BYTES + 64 + 1024 + i * 32 + 31];
     }
     require!(
         &extracted_x == authorized_relayer_x && &extracted_y == authorized_relayer_y,
@@ -397,7 +461,7 @@ fn assert_canonical_public_inputs(
     require!(private_input_count == 0, SolvusError::InvalidPublicInputs);
     require!(entry_count == public_input_count, SolvusError::InvalidPublicInputs);
 
-    let nullifier_start = GROTH16_PUBLIC_INPUT_HEADER_BYTES + 64 * 32;
+    let nullifier_start = GROTH16_PUBLIC_INPUT_HEADER_BYTES + 66 * 32;
     let nullifier_end = nullifier_start + 32;
     require!(
         &public_inputs[nullifier_start..nullifier_end] == nullifier_hash.as_ref(),
@@ -410,16 +474,7 @@ fn assert_canonical_public_inputs(
     );
     let btc_data = u64::from_be_bytes(btc_data_bytes);
 
-    let required_collateral = zkusd_amount
-        .checked_mul(15000)
-        .ok_or(SolvusError::MathOverflow)?
-        .checked_div(10000)
-        .ok_or(SolvusError::MathOverflow)?;
-
-    require!(
-        btc_data >= required_collateral,
-        SolvusError::InsufficientCollateral
-    );
+    // Dynamic collateral check removed - now handled in mint_zkusd with dynamic oracle price
 
     Ok(btc_data)
 }
@@ -487,6 +542,9 @@ pub struct MintZkUsd<'info> {
     pub fee_payer: Signer<'info>,
     #[account(seeds = [PROTOCOL_CONFIG_SEED], bump)]
     pub protocol_config: Account<'info, ProtocolConfig>,
+    /// CHECK: Validated manually against protocol_config
+    #[account(address = protocol_config.oracle_price_feed_id)]
+    pub oracle_price_feed: AccountInfo<'info>,
     #[account(
         init_if_needed,
         payer = fee_payer,
@@ -586,10 +644,11 @@ pub struct ProtocolConfig {
     pub authorized_relayer_pubkey_x: [u8; 32],
     pub authorized_relayer_pubkey_y: [u8; 32],
     pub updated_at: i64,
+    pub skip_verification: bool, // Dev mode only: skip ZK proof verification
 }
 
 impl ProtocolConfig {
-    pub const LEN: usize = 32 + 32 + 32 + 32 + 32 + 32 + 8;
+    pub const LEN: usize = 32 + 32 + 32 + 32 + 32 + 32 + 8 + 1;
 }
 
 #[account]
@@ -716,4 +775,8 @@ pub enum SolvusError {
     UnauthorizedLiquidator,
     #[msg("Liquidation amount exceeds collateral")]
     InvalidLiquidationAmount,
+    #[msg("Address is sanctioned")]
+    AddressSanctioned,
+    #[msg("Invalid oracle price")]
+    InvalidOraclePrice,
 }
