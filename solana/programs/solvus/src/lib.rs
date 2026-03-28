@@ -12,6 +12,7 @@ const PROTOCOL_CONFIG_SEED: &[u8] = b"protocol_config";
 const VAULT_SEED: &[u8] = b"vault";
 const DLC_CLOSE_TIMEOUT: i64 = 3600;
 const GRACE_PERIOD_DURATION: i64 = 3600;
+const L1_PREEMPTION_WINDOW: i64 = 86400; // 24 hours - window for liquidator to preempt before L1 refund
 const MAX_MINT_ZKUSD_AMOUNT: u64 = 1_000_000_000; // 1M zkUSD max per transaction
 const MAX_LIQUIDATOR_REWARD_BPS: u64 = 1000; // 10% max reward (in basis points)
 const SPL_TOKEN_PROGRAM_ID: Pubkey = pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
@@ -114,6 +115,7 @@ pub mod solvus {
         zkusd_amount: u64,
         proof: Vec<u8>,
         public_inputs: Vec<u8>,
+        l1_refund_timelock: i64,
     ) -> Result<()> {
         require!(!is_sanctioned(&ctx.accounts.owner.key()), SolvusError::AddressSanctioned);
         require!(zkusd_amount > 0, SolvusError::InvalidAmount);
@@ -191,6 +193,7 @@ pub mod solvus {
         vault.status = VaultStatus::Healthy as u8;
         vault.grace_period_end = None;
         vault.dlc_close_deadline = None;
+        vault.l1_refund_timelock = l1_refund_timelock;
 
         let nullifier_account = &mut ctx.accounts.nullifier_account;
         nullifier_account.owner = ctx.accounts.owner.key();
@@ -386,6 +389,21 @@ pub mod solvus {
             collateral_seized > 0 && collateral_seized <= vault.collateral_btc,
             SolvusError::InvalidLiquidationAmount
         );
+
+        // Preemption Window: Allow liquidation 24 hours before L1 refund timelock
+        let now = Clock::get()?.unix_timestamp;
+        let is_in_preemption_window = now >= vault.l1_refund_timelock.saturating_sub(L1_PREEMPTION_WINDOW) 
+            && now < vault.l1_refund_timelock;
+
+        // Allow liquidation in preemption window if vault is at risk or unhealthy
+        if is_in_preemption_window {
+            require!(
+                vault.status == VaultStatus::AtRisk as u8 
+                    || vault.status == VaultStatus::Unhealthy as u8 
+                    || vault.status == VaultStatus::GracePeriod as u8,
+                SolvusError::VaultNotLiquidatable
+            );
+        }
 
         // Validate liquidator reward <= 10% of collateral
         let max_reward = collateral_seized
@@ -693,10 +711,11 @@ pub struct VaultState {
     pub grace_period_end: Option<i64>,
     pub dlc_contract_id: Option<[u8; 32]>,
     pub dlc_close_deadline: Option<i64>,
+    pub l1_refund_timelock: i64, // Bitcoin L1 refund timelock timestamp
 }
 
 impl VaultState {
-    pub const LEN: usize = 160;
+    pub const LEN: usize = 168; // 160 + 8 for l1_refund_timelock
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
