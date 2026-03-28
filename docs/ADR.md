@@ -1526,21 +1526,24 @@ Mô tả: Kết hợp thêm entropy vào nullifier_hash.
 **Deciders:** VHEATM Audit Cycle #1
 **Tags:** `defi` `invariant` `liquidation` `critical`
 
-#### Context
+> **⚠️ SUPERSEDED by ADR-019-v2 (Dynamic Collateral Calculation)**
+> See ADR-019-v2 below for current implementation.
+
+#### Context (v1 - Obsolete)
 
 `VaultState` invariant trong CONTRACTS.md tham chiếu `collateralization_ratio` nhưng constant này không được define ở bất kỳ đâu trong codebase. Hai developer implement độc lập sẽ dùng giá trị khác nhau (1.0 vs 1.5 là hai giá trị hợp lý nhất), tạo ra 50% discrepancy trong ngưỡng liquidation. Một vault với 120% collateral là HEALTHY dưới ratio=1.0 nhưng UNHEALTHY dưới ratio=1.5.
 
 **Simulation E-01 confirmed:** Invariant gap verified. No definition found across all 3 project files.
 
-#### Decision
+#### Decision (v1 - Obsolete)
 
 > **Define `COLLATERALIZATION_RATIO = 15000`, `LIQUIDATION_THRESHOLD = 12000`, `AT_RISK_THRESHOLD = 13000` (basis points, ÷10000) là MANDATORY constants trong CONTRACTS.md. Sửa VaultState invariant thành: `collateral_btc * 10000 >= zkusd_minted * COLLATERALIZATION_RATIO`.**
 
-#### Evidence
+#### Evidence (v1 - Obsolete)
 
 Simulation E-01 (micro_sim_small): Invariant text confirmed undefined. Two implementations with ratio=1.0 vs ratio=1.5 produce divergent liquidation decisions on identical vault state.
 
-#### Pattern
+#### Pattern (v1 - Obsolete)
 
 ```rust
 // CONTRACTS.md constants (MANDATORY — do not hard-code elsewhere):
@@ -1552,11 +1555,75 @@ AT_RISK_THRESHOLD:       u64 = 13000  // 130% — AT_RISK below this
 assert!(collateral_btc * 10000 >= zkusd_minted * COLLATERALIZATION_RATIO);
 ```
 
-#### Rejected
+#### Rejected (v1 - Obsolete)
 
 - Runtime config: tạo attack surface (wrong config + oracle manipulation = mass liquidation).
 - 100% ratio: không có buffer cho BTC volatility.
 - 200% ratio: quá strict, kills UX.
+
+---
+
+### ADR-019-v2: Dynamic Collateral Calculation với BTC Price
+
+**Status:** 🔴 MANDATORY
+**Date:** 2026-03-28
+**Deciders:** Solvus Core Team
+**Tags:** `defi` `invariant` `liquidation` `critical` `oracle`
+
+#### Context
+
+Static collateralization ratio (150%) không phản ánh real economic value khi BTC biến động mạnh. Một vault với 150% static ratio có thể chỉ worth 75% USD nếu BTC giảm 50%, dẫn đến:
+- Vault appears "healthy" nhưng thực tế undercollateralized
+- Liquidations xảy ra đột ngột khi price drop, không có early warning
+- Attack surface cho oracle manipulation
+
+#### Decision
+
+> **Sử dụng dynamic collateral calculation dựa trên BTC price thực tế từ oracle. Vault phải maintain ≥150% collateral value in USD terms.**
+>
+> Formula: `required_satoshi = (zkusd_amount * 1_500_000_000) / btc_price`
+>
+> Trong đó:
+> - `zkusd_amount` với 6 decimals (e.g., 100.000000 zkUSD = 100_000_000)
+> - `btc_price` từ Pyth oracle với 8 decimals (e.g., $65,000 = 6_500_000_000)
+> - `required_satoshi` = số satoshi tối thiểu cần có
+
+#### Evidence
+
+```rust
+// Code implementation (solvus/src/lib.rs):
+let required_collateral = (zkusd_amount as u128)
+    .checked_mul(1_500_000_000)  // 1.5 * 10^6
+    .ok_or(SolvusError::MathOverflow)?
+    .checked_div(btc_price as u128)
+    .ok_or(SolvusError::MathOverflow)? as u64;
+
+require!(
+    btc_data >= required_collateral,
+    SolvusError::InsufficientCollateral
+);
+```
+
+#### Constants
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `COLLATERALIZATION_RATIO` | `15000` | 150% — target ratio in basis points (for display only) |
+| `LIQUIDATION_THRESHOLD` | `12000` | 120% — UNHEALTHY below this |
+| `AT_RISK_THRESHOLD` | `13000` | 130% — AT_RISK below this |
+
+#### Security Benefits
+
+1. **Real-time valuation**: Collateral always measured in USD terms
+2. **Early warning**: Vault becomes AtRisk/Unhealthy as soon as BTC drops
+3. **Anti-manipulation**: Cannot inflate vault value by holding appreciating assets
+4. **Oracle resilience**: Pyth with 60s staleness check (ADR-040)
+
+#### Rejected Alternatives
+
+- Static ratio: Does not reflect real economic value, creates hidden risk
+- Time-weighted average price (TWAP): Adds complexity, delays risk detection
+- Multiple oracle aggregation: Deferred to future phase
 
 ---
 
@@ -2202,3 +2269,67 @@ fn normalize_price(price: u128, decimals: u8) -> u64 {
 
 - **Giả định tất cả các nhà cung cấp đều sử dụng 8 chữ số thập phân:** Đây là một giả định nguy hiểm và mong manh. Bất kỳ sự thay đổi nào từ phía nhà cung cấp cũng sẽ phá vỡ hệ thống.
 - **Lưu trữ giá và độ chính xác riêng biệt và tính toán trên từng trường hợp:** Phức tạp hóa logic một cách không cần thiết và dễ gây ra lỗi. Việc chuẩn hóa ngay từ đầu sẽ đơn giản và an toàn hơn nhiều.
+
+---
+
+### ADR-041: L1 Preemption Window cho Liquidation
+
+**Status:** 🔴 MANDATORY
+**Date:** 2026-03-28
+**Deciders:** Solvus Core Team
+**Tags:** `liquidation` `dlc` `security` `timelock`
+
+#### Context
+
+Khi một vault ở trạng thái `PendingBtcRelease` (zkUSD đã burn, BTC chờ release trên Bitcoin), DLC có một L1 refund timelock. Nếu DLC không được đóng kịp thời, người dùng có quyền reclaim BTC của họ sau khi timelock expires.
+
+Tuy nhiên, nếu vault đang ở trạng thái AtRisk hoặc Unhealthy trong khi chờ DLC close, liquidator nên có quyền liquidate vault **trước khi** L1 timelock expires — để:
+- Bảo vệ protocol khỏi undercollateralized positions
+- Ngăn chặn users exploit DLC timelock để delay liquidation
+
+#### Decision
+
+> **Cho phép liquidation của vault trong preemption window: 24 giờ trước L1 refund timelock.**
+>
+> Preemption window = `l1_refund_timelock - L1_PREEMPTION_WINDOW` đến `l1_refund_timelock`
+>
+> Trong preemption window, vault ở AtRisk/Unhealthy/GracePeriod có thể được liquidate bất kể trạng thái DLC.
+
+#### Constants
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `L1_PREEMPTION_WINDOW` | `86400` | 24 hours in seconds |
+
+#### Evidence
+
+```rust
+// Code implementation (solvus/src/lib.rs):
+const L1_PREEMPTION_WINDOW: i64 = 86400;
+
+// In liquidate_vault_cpi:
+let is_in_preemption_window = now >= vault.l1_refund_timelock.saturating_sub(L1_PREEMPTION_WINDOW) 
+    && now < vault.l1_refund_timelock;
+
+// Allow liquidation in preemption window if vault is at risk or unhealthy
+if is_in_preemption_window {
+    require!(
+        vault.status == VaultStatus::AtRisk as u8 
+            || vault.status == VaultStatus::Unhealthy as u8 
+            || vault.status == VaultStatus::GracePeriod as u8,
+        SolvusError::VaultNotLiquidatable
+    );
+}
+```
+
+#### Security Considerations
+
+1. **Fair warning**: Users have 24h notice before liquidation becomes possible
+2. **DLC protection**: Liquidators cannot seize collateral until timelock is near expiry
+3. **Protocol safety**: Prevents indefinite postponement of liquidation via DLC
+
+#### Rejected Alternatives
+
+- **Allow liquidation anytime**: Too aggressive, gives liquidators advantage over users in DLC
+- **No preemption window**: Users could indefinitely delay liquidation by creating DLC
+- **Shorter window (12h)**: May not give enough time for liquidation to be executed

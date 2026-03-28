@@ -60,6 +60,10 @@ FieldName :: Field                      — BN254 field element
 | `CIRCUIT_BREAKER_TIMEOUT` | `u64` | `259200` | 72 hours in seconds. Circuit breaker auto-expires if admin multisig fails to renew. (ADR-023) |
 | `DLC_CLOSE_TIMEOUT` | `u64` | `3600` | 1 hour in seconds. Max time for Relayer to close DLC after BurnZkUSD event. 3 retries within window. (ADR-024) |
 | `GRACE_PERIOD_DURATION` | `u64` | `3600` | 1 hour in seconds. Duration of liquidation grace period (ADR-016, ADR-028). Always enabled in Phase 1 — no flag. |
+| `L1_PREEMPTION_WINDOW` | `i64` | `86400` | 24 hours in seconds. Window before L1 refund timelock when liquidation is allowed. (ADR-041) |
+| `MAX_MINT_ZKUSD_AMOUNT` | `u64` | `1_000_000_000` | Maximum zkUSD amount that can be minted in a single transaction. |
+| `MAX_LIQUIDATOR_REWARD_BPS` | `u64` | `1000` | 10% in basis points. Maximum liquidator reward as percentage of seized collateral. |
+| `PYTH_STALENESS_SECONDS` | `i64` | `60` | 60 seconds. Maximum age of Pyth oracle price before considered stale. (ADR-040) |
 | `WHALE_THRESHOLD` | `u64` | `100_000_000` | 1 BTC in satoshis. Minimum BTC balance to qualify for Whale badge. INV-13. (ADR-027) |
 | `HODLER_THRESHOLD` | `u64` | `365` | Days. Oldest UTXO must be ≥ 365 days to qualify for Hodler badge. INV-13. (ADR-027) |
 | `STACKER_THRESHOLD` | `u64` | `10` | Count. Must have ≥ 10 UTXOs to qualify for Stacker badge. INV-13. (ADR-027) |
@@ -98,22 +102,23 @@ RecoveryByteRange ::
 **Không dùng cho:** Không dùng cho Groth16 public inputs
 **Lưu ý:** Xverse format được khuyến nghị. Recovery byte phải được strip trước hashing (ADR-006).
 
-### TransactionStatus
+### VaultStatus
 
 ```
-TransactionStatus ::
-  | Pending (0)            // Giao dịch đang chờ xử lý
-  | Confirmed (1)          // Giao dịch đã confirm trên Solana
-  | Failed (2)             // Giao dịch thất bại
-  | Liquidated (3)         // Vault đã bị liquidate
-  | PendingBtcRelease (4)  // zkUSD burned, DLC close in-flight on Bitcoin (ADR-024)
-                           // Window: zkUSD = 0, BTC not yet released (~60 min max)
-  | DlcTimeoutPending (5)  // DLC_CLOSE_TIMEOUT passed, Relayer failed — Admin Multisig alerted (ADR-037)
-                           // Triggered permissionlessly via claim_dlc_timeout() after dlc_close_deadline
+VaultStatus ::
+  | Initialized (0)      // Vault vừa được tạo, chưa có collateral
+  | Healthy (1)          // Vault đủ collateral (≥150%)
+  | AtRisk (2)           // Vault cần attention (130-150%)
+  | Unhealthy (3)        // Vault không đủ collateral (<120%), eligible cho liquidation
+  | GracePeriod (4)      // Vault đang trong grace period (ADR-016)
+  | Liquidated (5)       // Vault đã bị liquidate
+  | Closed (6)           // DLC đã đóng, vault hoàn tất
+  | PendingBtcRelease (7)// zkUSD burned, DLC close in-flight on Bitcoin (ADR-024)
+  | DlcTimeoutPending (8)// DLC_CLOSE_TIMEOUT passed, Relayer failed (ADR-037)
 ```
 
-**Dùng ở:** Tracking transaction state
-**Không dùng cho:** Public inputs
+**Dùng ở:** `VaultState.status`
+**Lưu ý:** Đây là vault lifecycle states, khác với transaction status.
 
 ---
 
@@ -284,11 +289,12 @@ VaultState :: {
   collateral_btc     :: u64           // BTC collateral (satoshis)
   zkusd_minted       :: u64           // zkUSD đã mint
   last_update        :: u64           // Timestamp của lần update cuối
-  status             :: TransactionStatus  // Trạng thái vault
+  status             :: VaultStatus   // Trạng thái vault
   liquidation_price  :: u64?          // Giá liquidation (optional)
   grace_period_end   :: u64?          // Khi nào grace period kết thúc (ADR-016)
   dlc_contract_id    :: [u8; 32]?     // DLC contract ID trên Bitcoin (ADR-024, set at mint)
   dlc_close_deadline :: u64?          // Deadline để Relayer close DLC sau burn (ADR-024)
+  l1_refund_timelock :: i64           // Bitcoin L1 refund timelock timestamp (ADR-041)
 }
 ```
 

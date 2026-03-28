@@ -250,6 +250,10 @@ pub mod solvus {
         let vault = &mut ctx.accounts.vault;
         require_keys_eq!(vault.owner, ctx.accounts.owner.key(), SolvusError::Unauthorized);
         require!(
+            vault.status != VaultStatus::GracePeriod as u8,
+            SolvusError::BurnInGracePeriod
+        );
+        require!(
             vault.status == VaultStatus::Healthy as u8 || vault.status == VaultStatus::AtRisk as u8,
             SolvusError::BurnNotAllowedInCurrentState
         );
@@ -849,4 +853,22 @@ pub enum SolvusError {
     InvalidOraclePrice,
     #[msg("Oracle price is stale")]
     StaleOraclePrice,
+    #[msg("Vault is healthy, cannot liquidate")]
+    VaultHealthy,
+    #[msg("Vault already liquidated")]
+    AlreadyLiquidated,
+    #[msg("Invalid Bitcoin address")]
+    InvalidBtcAddress,
+    #[msg("Relayer signature invalid or expired")]
+    RelayerSignatureInvalid,
+    #[msg("Oracle price is stale")]
+    OraclePriceStale,
+    #[msg("Oracle prices diverge too much")]
+    OraclePriceDivergence,
+    #[msg("BTC address is already locked in an active DLC")]
+    BtcAlreadyLockedInDlc,
+    #[msg("Vault is not in PendingBtcRelease state")]
+    VaultNotPendingBtcReleaseAlt,
+    #[msg("Proof generation timed out")]
+    ProofServerTimeout,
 }
