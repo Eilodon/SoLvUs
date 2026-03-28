@@ -101,8 +101,12 @@ export async function fetchRelayerData(params: FetchRelayerDataParams): Promise<
     }
   }
 
-  if (params.indexer.hasActiveDlc && (await params.indexer.hasActiveDlc(params.btcAddress))) {
-    throw new Error(`BTC address ${params.btcAddress} is already locked in an active DLC`);
+  // Verify DLC funding if dlcContractId is provided
+  if (params.dlcContractId) {
+    const isDlcFunded = await params.indexer.verifyProtocolDlcFunding(params.btcAddress, params.dlcContractId);
+    if (!isDlcFunded) {
+      throw new Error(`Oracle Attestation Failed: No confirmed DLC funding transaction found for contract ID ${params.dlcContractId} on Bitcoin address ${params.btcAddress}.`);
+    }
   }
 
   const btc_data = await computeBtcData(params.indexer, params.btcAddress, params.badgeType, now);
@@ -152,7 +156,7 @@ export class MockBitcoinIndexer implements BitcoinIndexer {
     return this.utxos;
   }
 
-  async hasActiveDlc(): Promise<boolean> {
-    return false;
+  async verifyProtocolDlcFunding(_btcAddress: string, _dlcContractId: string): Promise<boolean> {
+    return true; // Mock always returns true for testing
   }
 }

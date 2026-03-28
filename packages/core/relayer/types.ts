@@ -8,7 +8,7 @@ export interface Utxo {
 export interface BitcoinIndexer {
   getBalance(btcAddress: string): Promise<number>;
   getUtxos(btcAddress: string): Promise<Utxo[]>;
-  hasActiveDlc?(btcAddress: string): Promise<boolean>;
+  verifyProtocolDlcFunding(btcAddress: string, dlcContractId: Hex): Promise<boolean>;
 }
 
 export interface RelayerSigner {
@@ -23,7 +23,8 @@ export interface FetchRelayerDataParams {
   badgeType: BadgeType;
   userPubkeyX: Hex;
   solanaAddress: Hex;
-  timestamp: number;           // ADD — timestamp to validate
+  timestamp: number;
+  dlcContractId?: Hex;  // Optional DLC contract ID for verification
   indexer: BitcoinIndexer;
   signer: RelayerSigner;
   stateStore?: RelayerStateStore;
