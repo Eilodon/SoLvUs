@@ -130,7 +130,7 @@ TransactionStatus ::
 ```
 RelayerResponse :: {
   btc_data       :: u64         // Balance (sat), Age (days), or Count (UTXOs) — tùy badge_type
-  timestamp      :: u64         // Unix timestamp from Relayer (INV-05)
+  dlc_contract_id:: Field       // DLC contract ID from Bitcoin (Asset-Bound Nullifier)
   pubkey_x       :: [u8; 32]    // Relayer's public key X-coordinate (ECDSA)
   pubkey_y       :: [u8; 32]    // Relayer's public key Y-coordinate (ECDSA)
   signature      :: [u8; 64]    // Compact signature [r||s] (INV-10) — không có recovery byte
@@ -140,7 +140,7 @@ RelayerResponse :: {
 **Constraints:**
 ```
 INVARIANT: btc_data > 0                          // Phải có dữ liệu
-INVARIANT: timestamp <= current_time + TOLERANCE // Không quá cũ
+INVARIANT: dlc_contract_id != 0                  // DLC phải được tạo
 INVARIANT: signature.length == 64                // Chính xác 64 bytes
 RANGE:     btc_data ∈ [0, 2^64)                  // Fit trong u64
 INV-10:    signature = r_bytes_be || s_bytes_be  // Big-endian [r||s], no recovery byte (ADR-021)
@@ -170,19 +170,18 @@ ProverInputs :: {
   nullifier_secret :: Field      // Derived from user signature (ADR-003, ADR-006)
   pubkey_x         :: [u8; 32]   // User's BTC pubkey X (ADR-002) — PRIVATE
   pubkey_y         :: [u8; 32]   // User's BTC pubkey Y (ADR-002) — PRIVATE
-  user_sig         :: [u8; 64]   // User's signature on Solana address + nonce — PRIVATE
+  user_sig         :: [u8; 64]   // User's signature on Solana address + dlc_contract_id — PRIVATE
   btc_data         :: u64        // Data from Relayer — PRIVATE
   relayer_sig      :: [u8; 64]   // Signature from Relayer — PRIVATE
 
   // ========== PUBLIC INPUTS (verify bởi Groth16 verifier) ==========
   solana_address   :: [u8; 32]   // Target Solana address for zkUSD (Pubkey) — PUBLIC
-  nonce            :: Field      // To prevent replay attacks — PUBLIC
+  dlc_contract_id  :: Field      // DLC contract ID from Relayer — PUBLIC
   relayer_pubkey_x :: [u8; 32]   // For relayer sig verification — PUBLIC
   relayer_pubkey_y :: [u8; 32]   // For relayer sig verification — PUBLIC
   badge_type       :: u8         // INV-14 — PUBLIC
   threshold        :: u64        // INV-13 — PUBLIC
   is_upper_bound   :: bool       // Always false in V1 — PUBLIC
-  timestamp        :: u64        // INV-05 — PUBLIC
   nullifier_hash   :: Field      // For on-chain PDA registry (ADR-010) — PUBLIC
                                  // Serialization: Field → [u8;32] big-endian (ADR-021)
 }
@@ -195,13 +194,9 @@ INVARIANT: pubkey_x, pubkey_y là điểm trên curve // Phải là điểm ECDS
 INVARIANT: badge_type ∈ [1, 3]                   // Phải là Whale, Hodler, hoặc Stacker
 INVARIANT: threshold > 0                         // Threshold phải dương
 INVARIANT: threshold ∈ {WHALE_THRESHOLD, HODLER_THRESHOLD, STACKER_THRESHOLD} per badge_type  // INV-13 (ADR-027)
-INVARIANT: timestamp <= current_time + TOLERANCE // Timestamp không quá cũ
-INVARIANT: nullifier_hash = Hash(nullifier_secret, badge_type, timestamp, nonce)
+INVARIANT: nullifier_hash = Poseidon(dlc_contract_id, badge_type, nullifier_secret, 0)
 INV-13:    threshold must equal the canonical constant for its badge_type:
            Whale(1) → WHALE_THRESHOLD, Hodler(2) → HODLER_THRESHOLD, Stacker(3) → STACKER_THRESHOLD
-INV-15:    nonce = Poseidon(solana_address_as_field, floor(timestamp/60))
-           Rate limit: 1 unique nonce per (solana_address) per minute — cross all badge_types. (ADR-038)
-           badge_type REMOVED from nonce seed to prevent rate-limit bypass via badge_type cycling.
 ```
 
 **Không được nhầm với:** `RelayerResponse` — khác ở chỗ ProverInputs bao gồm cả private inputs.
@@ -216,11 +211,12 @@ INV-15:    nonce = Poseidon(solana_address_as_field, floor(timestamp/60))
 
 ```
 MintZkUSDInput :: {
-  nullifier_hash  :: [u8; 32]    // PDA seed, derived from Noir Field (ADR-010)
-  zkusd_amount    :: u64         // Amount of zkUSD to mint (INV-16)
-  proof           :: Vec<u8>     // Groth16 ZK Proof (canonical verifier wire format)
-  public_inputs   :: Vec<u8>     // Serialized public inputs for verifier (ADR-009)
-  relayer_fee     :: u64?        // Optional relayer fee (ADR-012)
+  nullifier_hash    :: [u8; 32]    // PDA seed, derived from Noir Field (ADR-010)
+  zkusd_amount      :: u64         // Amount of zkUSD to mint (INV-16)
+  proof             :: Vec<u8>     // Groth16 ZK Proof (canonical verifier wire format)
+  public_inputs     :: Vec<u8>     // Serialized public inputs for verifier (ADR-009)
+  l1_refund_timelock:: i64         // Bitcoin L1 refund timelock timestamp
+  relayer_fee       :: u64?        // Optional relayer fee (ADR-012)
 }
 ```
 

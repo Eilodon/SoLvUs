@@ -105,10 +105,10 @@
       │ output: Ref<RelayerResponse> (TSS-signed - ADR-011, ADR-014)
       │ side effect: Query Bitcoin network
       ▼
-[5] Prover: buildProverInputs(RelayerResponse, nullifier_secret, solana_address, nonce)
-      │ input:  Ref<RelayerResponse>, Field (nullifier_secret), [u8; 32] (solana_address), Field (nonce)
+[5] Prover: buildProverInputs(RelayerResponse, nullifier_secret, solana_address)
+      │ input:  Ref<RelayerResponse>, Field (nullifier_secret), [u8; 32] (solana_address)
       │ output: Ref<ProverInputs> (validated)
-      │ side effect: Compute nullifier_hash
+      │ side effect: Compute nullifier_hash = Poseidon(dlc_contract_id, badge_type, nullifier_secret, 0)
       ▼
 [6] Prover Server: generateProof(ProverInputs)
       │ input:  Ref<ProverInputs>
@@ -163,17 +163,17 @@
       └─ user action: Cannot retry (same nullifier)
 ```
 
-### Error Path — Expired Timestamp
+### Error Path — Double Spend
 
 ```
 [7] Solana (Anchor Program): mint_zkusd(proof, public_inputs, ...)
-      │ Check: timestamp <= current_time + TOLERANCE?
-      │ Result: NO (too old)
-      │ error: Ref<ERROR_EXPIRED_TIMESTAMP>
+      │ Check: dlc_contract_id valid and not already used?
+      │ Result: NO (already spent)
+      │ error: Ref<ERROR_DOUBLE_SPEND>
       ▼
-[7a] Error Handler: Return ERROR_EXPIRED_TIMESTAMP (INV-05)
-      │ message: "Timestamp expired: {timestamp} < {current_time - TOLERANCE}"
-      │ context: timestamp, current_time, tolerance
+[7a] Error Handler: Return ERROR_DOUBLE_SPEND (ADR-010)
+      │ message: "Nullifier already used: {nullifier_hash}"
+      │ context: nullifier_hash
       ▼
 [7b] Frontend: Display error message to user
       └─ user action: Retry with fresh proof
@@ -381,13 +381,13 @@ PSEUDOCODE:
      - Whale: sum of all UTXO values (satoshis)
      - Hodler: age of oldest UTXO (days)
      - Stacker: count of UTXOs
-  4. timestamp = current_unix_time
-  5. payload = [x_hi, x_lo, btc_data, timestamp]
+  4. Create DLC contract on Bitcoin (returns dlc_contract_id)
+  5. payload = [x_hi, x_lo, btc_data, dlc_contract_id]
   6. hash = Poseidon(payload) (ADR-001)
   7. signature = TSS_SIGN(hash) (ADR-011, ADR-014)
   8. return RelayerResponse {
        btc_data,
-       timestamp,
+       dlc_contract_id,
        pubkey_x,
        pubkey_y,
        signature
@@ -397,7 +397,7 @@ CONSTRAINTS:
   - btc_address phải hợp lệ (Bitcoin address format)
   - badge_type phải là Whale, Hodler, hoặc Stacker
   - btc_data phải > 0 (có ít nhất 1 UTXO)
-  - timestamp phải <= current_time
+  - dlc_contract_id phải hợp lệ (từ DLC contract trên Bitcoin)
   - Signature phải hợp lệ (TSS-signed)
 
 ERROR HANDLING:
@@ -423,7 +423,6 @@ SIGNATURE:
     relayer_response: RelayerResponse,
     nullifier_secret: Field,
     solana_address: [u8; 32],
-    nonce: Field,
     badge_type: BadgeType,
     threshold: u64
   ) → ProverInputs
@@ -431,30 +430,22 @@ SIGNATURE:
 PSEUDOCODE:
   1. Validate all inputs
   2. Compute nullifier_hash:
-     nullifier_hash = Hash(nullifier_secret, badge_type, timestamp, nonce)
+     nullifier_hash = Poseidon(dlc_contract_id, badge_type, nullifier_secret, 0)
   3. Extract pubkey_x, pubkey_y từ relayer_response
-  // NONCE COMPUTATION (ADR-038 — INV-15 updated):
-  // nonce = Poseidon(solana_address_as_field, floor(timestamp/60))
-  // badge_type REMOVED from nonce seed — rate-limit is per (user, minute), not per (user, badge_type, minute)
-  // badge_type remains a separate public input in circuit
   4. return ProverInputs {
-       // Private inputs
-       nullifier_secret,
-       pubkey_x: relayer_response.pubkey_x,
-       pubkey_y: relayer_response.pubkey_y,
-       user_sig: (from wallet),
+       dlc_contract_id: relayer_response.dlc_contract_id,
+       nullifier_secret,  // PRIVATE INPUT
+       pubkey_x,
+       pubkey_y,
+       user_sig,
        btc_data: relayer_response.btc_data,
        relayer_sig: relayer_response.signature,
-       
-       // Public inputs
        solana_address,
-       nonce,
        relayer_pubkey_x: relayer_response.pubkey_x,
        relayer_pubkey_y: relayer_response.pubkey_y,
        badge_type,
        threshold,
        is_upper_bound: false,
-       timestamp: relayer_response.timestamp,
        nullifier_hash
      }
 

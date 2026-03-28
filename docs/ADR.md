@@ -70,7 +70,7 @@
 
 #### Context
 
-Relayer cần ký một gói dữ liệu (x_hi, x_lo, btc_data, timestamp) để chứng minh trạng thái Bitcoin. Lựa chọn hàm hash ảnh hưởng trực tiếp đến:
+Relayer cần ký một gói dữ liệu (x_hi, x_lo, btc_data, dlc_contract_id) để chứng minh trạng thái Bitcoin. Lựa chọn hàm hash ảnh hưởng trực tiếp đến:
 - Thời gian tạo bằng chứng (proving time)
 - Chi phí xác minh trên chuỗi
 - Tối ưu hóa mạch Noir (số constraints)
@@ -81,7 +81,7 @@ Relayer cần ký một gói dữ liệu (x_hi, x_lo, btc_data, timestamp) để
 - Phải đủ an toàn về mặt mật mã
 
 **Requirements:**
-- Hỗ trợ đầu vào 4 fields (x_hi, x_lo, btc_data, timestamp)
+- Hỗ trợ đầu vào 4 fields (x_hi, x_lo, btc_data, dlc_contract_id)
 - Output phải là Field trong BN254
 - Phải có thư viện TypeScript để verify trên client
 
@@ -151,7 +151,7 @@ Mô tả: Hàm hash được sử dụng trong Ethereum.
 
 - Sử dụng `circomlibjs@0.1.7` chính xác (xem ADR-005)
 - Verify Poseidon hash trên client trước khi gửi proof
-- Đảm bảo input order luôn: [x_hi, x_lo, btc_data, timestamp]
+- Đảm bảo input order luôn: [x_hi, x_lo, btc_data, dlc_contract_id]
 - Không thay đổi tham số Poseidon mà không có ADR mới
 
 **Xem thêm:** BLUEPRINT.md Section 4 (Relayer Component), CONTRACTS.md `RelayerResponse`
@@ -1483,7 +1483,7 @@ Mô tả: Kết hợp thêm entropy vào nullifier_hash.
 
 #### Decision
 
-> **Tăng cường tính duy nhất của `nullifier_hash` bằng cách kết hợp thêm các yếu tố entropy (ví dụ: `commitment_hash` hoặc `transaction_hash`) vào quá trình tạo `nullifier_hash` trong Noir circuit.** Root Cause Taxonomy V2 (Serialization Boundary).
+> **Tăng cường tính duy nhất của `nullifier_hash` bằng Asset-Bound Nullifier architecture: `nullifier_hash = Poseidon(dlc_contract_id, badge_type, nullifier_secret, 0)`. DLC contract ID cung cấp entropy từ Bitcoin network, đảm bảo uniqueness và zero-knowledge.**
 
 #### Consequences
 
@@ -1893,7 +1893,11 @@ Allow burn during grace period (defeats anti-MEV purpose).
 
 #### Decision
 
-> **(1)** **Nonce generation (INV-15):** `nonce = Poseidon(solana_address_as_field, floor(timestamp/60), badge_type)` — deterministic, rate-limits to 1 mint per (user, badge_type) per minute. Poseidon already in stack (ADR-001) — frugal reuse. **(2)** **Multi-badge minting: EXPLICITLY ALLOWED.** Whale + Hodler + Stacker = separate qualifications, separate DLC positions. Document rõ trong CONTRACTS.md.
+> **(1)** **Asset-Bound Nullifier:** Sử dụng `dlc_contract_id` thay thế cho `nonce` và `timestamp`. Nullifier được tính: `nullifier_hash = Poseidon(dlc_contract_id, badge_type, nullifier_secret, 0)`. Điều này đảm bảo:
+> - Rate-limiting tự nhiên qua DLC contract (1 DLC per mint)
+> - Stateless relayer (không cần stateStore)
+> - Zero-knowledge (nullifier_secret là private input)
+> **(2)** **Multi-badge minting: EXPLICITLY ALLOWED.** Whale + Hodler + Stacker = separate qualifications, separate DLC positions.
 
 #### Evidence
 
@@ -1902,16 +1906,22 @@ Sim E-08 (micro_sim_small): nonce=0 + timestamp drift attack confirmed. Poseidon
 #### Pattern
 
 ```typescript
-// MANDATORY — Frontend/Prover nonce generation:
-function computeNonce(solanaAddress: Uint8Array, timestamp: number, badgeType: number): Field {
-  const minuteTimestamp = Math.floor(timestamp / 60);
+// MANDATORY — Frontend/Prover nullifier computation:
+function computeNullifierHash(
+  dlcContractId: Field,
+  badgeType: number,
+  nullifierSecret: Field
+): Field {
   return poseidon([
-    BigInt('0x' + Buffer.from(solanaAddress).toString('hex')),
-    BigInt(minuteTimestamp),
-    BigInt(badgeType)
+    dlcContractId,
+    BigInt(badgeType),
+    nullifierSecret,
+    0n
   ]);
 }
-// Multi-badge: each badge_type produces different nonce → different nullifier → different PDA → ALLOWED
+// nullifier_secret is generated from user signature (see ADR-003, ADR-006)
+// dlc_contract_id comes from Relayer response (DLC contract on Bitcoin)
+// Multi-badge: each badge_type produces different nullifier → different PDA → ALLOWED
 ```
 
 #### Rejected
