@@ -147,11 +147,13 @@ pub mod solvus {
         // btc_price expected in USD with 8 decimals (e.g. 65000.00000000)
         // zkusd_amount expected with 6 decimals (e.g. 100.000000)
         // btc_data in satoshis (8 decimals)
-        let required_collateral = zkusd_amount
-            .checked_mul(15000)
+        // Formula: required_satoshi = (zkusd_amount * 1.5 * 10^6) / (btc_price * 10^-8)
+        // = (zkusd_amount * 1_500_000_000) / btc_price
+        let required_collateral = (zkusd_amount as u128)
+            .checked_mul(1_500_000_000)
             .ok_or(SolvusError::MathOverflow)?
-            .checked_div(btc_price)
-            .ok_or(SolvusError::MathOverflow)?;
+            .checked_div(btc_price as u128)
+            .ok_or(SolvusError::MathOverflow)? as u64;
 
         require!(
             btc_data >= required_collateral,
@@ -283,11 +285,13 @@ pub mod solvus {
             require!(btc_price > 0, SolvusError::InvalidOraclePrice);
 
             // Check remaining collateral >= 150% of remaining zkusd
-            let required_collateral = remaining_zkusd
-                .checked_mul(15000)
+            // Formula: required_satoshi = (zkusd_amount * 1.5 * 10^6) / (btc_price * 10^-8)
+            // = (zkusd_amount * 1_500_000_000) / btc_price
+            let required_collateral = (remaining_zkusd as u128)
+                .checked_mul(1_500_000_000)
                 .ok_or(SolvusError::MathOverflow)?
-                .checked_div(btc_price)
-                .ok_or(SolvusError::MathOverflow)?;
+                .checked_div(btc_price as u128)
+                .ok_or(SolvusError::MathOverflow)? as u64;
 
             require!(
                 vault.collateral_btc >= required_collateral,

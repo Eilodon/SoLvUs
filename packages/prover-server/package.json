@@ -4,5 +4,14 @@
   "private": true,
   "scripts": {
     "start": "TS_NODE_FILES=true ts-node prover_server.ts"
+  },
+  "dependencies": {
+    "ioredis": "^5.3.2"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/cors": "^2.8.17",
+    "typescript": "^5.3.3",
+    "ts-node": "^10.9.2"
   }
 }

@@ -4,9 +4,16 @@ import dotenv from 'dotenv';
 import express from 'express';
 import path from 'path';
 import { PublicKey } from '@solana/web3.js';
-import { InMemoryRelayerStore } from '../core/relayer/state';
+import Redis from 'ioredis';
 
-const relayerStateStore = new InMemoryRelayerStore();
+const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
+const redis = new Redis(REDIS_URL, {
+  maxRetriesPerRequest: 3,
+  retryStrategy: (times) => Math.min(times * 50, 2000),
+});
+
+redis.on('error', (err) => console.error('Redis connection error:', err));
+redis.on('connect', () => console.log('Connected to Redis for idempotency cache'));
 
 const workspaceRoot = path.join(__dirname, '../..');
 const solvusEnv = process.env.SOLVUS_ENV || 'devnet';
@@ -35,7 +42,7 @@ import {
 const app = express();
 const config = loadConfig();
 const PORT = process.env.PROVER_PORT || 3001;
-const cache = new Map<string, { expiresAt: number; response: ProofResponse }>();
+const CACHE_TTL_SECONDS = Math.floor(RELAYER_SIG_EXPIRY / 1000);
 
 app.use(cors());
 app.use(bodyParser.json({ limit: '1mb' }));
@@ -47,7 +54,7 @@ app.get('/health', (req, res) => {
     prover_backend: config.proverBackend,
     prover_adapter_mode: getGroth16AdapterMode(),
     devnet_mint_proof_mode: getDevnetMintProofMode(),
-    cache_entries: cache.size,
+    cache_backend: 'redis',
     solvus_program_id: config.solvusProgramId || null,
     groth16_verifier_program_id: config.groth16VerifierProgramId || null,
     oracle_price_feed_id: config.oraclePriceFeedId || null,
@@ -68,15 +75,19 @@ app.post('/prove', async (req, res) => {
 
     const idempotencyKey =
       (req.header('X-Idempotency-Key') || stableJsonHash(proverInputs)).toLowerCase();
-    const cached = cache.get(idempotencyKey);
-    const now = Math.floor(Date.now() / 1000);
-
-    if (cached && cached.expiresAt > now) {
-      return res.json({
-        ...cached.response,
-        cached: true,
-        retry_count: 1,
-      });
+    
+    // Check Redis cache for idempotency
+    const cached = await redis.get(`idempotency:${idempotencyKey}`);
+    if (cached) {
+      const parsed = JSON.parse(cached) as { expiresAt: number; response: ProofResponse };
+      const now = Math.floor(Date.now() / 1000);
+      if (parsed.expiresAt > now) {
+        return res.json({
+          ...parsed.response,
+          cached: true,
+          retry_count: 1,
+        });
+      }
     }
 
     const startedAt = Date.now();
@@ -89,10 +100,14 @@ app.post('/prove', async (req, res) => {
       retry_count: 0,
     };
 
-    cache.set(idempotencyKey, {
-      expiresAt: now + RELAYER_SIG_EXPIRY,
-      response,
-    });
+    // Store in Redis with TTL
+    const expiresAt = Math.floor(Date.now() / 1000) + CACHE_TTL_SECONDS;
+    await redis.set(
+      `idempotency:${idempotencyKey}`,
+      JSON.stringify({ expiresAt, response }),
+      'EX',
+      CACHE_TTL_SECONDS
+    );
 
     return res.json(response);
   } catch (error: any) {
@@ -158,7 +173,6 @@ app.post('/prepare-devnet-mint', async (req, res) => {
     const owner = new PublicKey(ownerPubkey);
     const fixture = await createDynamicDevMintFixture({
       solana_address: bytesToHex(owner.toBytes()),
-      stateStore: relayerStateStore,
     });
     assertValidProverInputs(fixture.prover_inputs);
 
@@ -187,13 +201,12 @@ app.post('/prepare-devnet-mint', async (req, res) => {
 });
 
 function assertValidProverInputs(inputs: ProverInputs): void {
-  validateBytesLength(inputs.nullifier_secret, 32, 'nullifier_secret');
+  validateBytesLength(inputs.dlc_contract_id, 32, 'dlc_contract_id');
   validateBytesLength(inputs.pubkey_x, 32, 'pubkey_x');
   validateBytesLength(inputs.pubkey_y, 32, 'pubkey_y');
   validateBytesLength(inputs.user_sig, 64, 'user_sig');
   validateBytesLength(inputs.relayer_sig, 64, 'relayer_sig');
   validateBytesLength(inputs.solana_address, 32, 'solana_address');
-  validateBytesLength(inputs.nonce, 32, 'nonce');
   validateBytesLength(inputs.relayer_pubkey_x, 32, 'relayer_pubkey_x');
   validateBytesLength(inputs.relayer_pubkey_y, 32, 'relayer_pubkey_y');
   validateBytesLength(inputs.nullifier_hash, 32, 'nullifier_hash');
