@@ -183,6 +183,16 @@ pub mod solvus {
 
         let now = Clock::get()?.unix_timestamp;
         let vault = &mut ctx.accounts.vault;
+
+        // ADR-002: Prevent vault resurrection after terminal state (Liquidated/Closed)
+        if vault.owner != Pubkey::default() {
+            require!(
+                vault.status != VaultStatus::Liquidated as u8
+                    && vault.status != VaultStatus::Closed as u8,
+                SolvusError::VaultInTerminalState
+            );
+        }
+
         if vault.owner == Pubkey::default() {
             vault.owner = ctx.accounts.owner.key();
             vault.collateral_btc = btc_data;
@@ -867,6 +877,8 @@ pub enum SolvusError {
     OraclePriceDivergence,
     #[msg("BTC address is already locked in an active DLC")]
     BtcAlreadyLockedInDlc,
+    #[msg("Vault is in terminal state and cannot accept new operations")]
+    VaultInTerminalState,
     #[msg("Vault is not in PendingBtcRelease state")]
     VaultNotPendingBtcReleaseAlt,
     #[msg("Proof generation timed out")]

@@ -63,7 +63,7 @@ app.get('/health', (req, res) => {
 });
 
 app.post('/prove', async (req, res) => {
-  req.setTimeout(180000);
+  req.setTimeout(45000);  // ADR-004: 45s < Solana tx timeout (~40s)
 
   try {
     const proverInputs = req.body?.prover_inputs as ProverInputs | undefined;
@@ -121,7 +121,7 @@ app.post('/prove', async (req, res) => {
 });
 
 app.post('/mint-devnet', async (req, res) => {
-  req.setTimeout(180000);
+  req.setTimeout(45000);  // ADR-004: 45s < Solana tx timeout
 
   try {
     const proverInputs = req.body?.prover_inputs as ProverInputs | undefined;
@@ -158,7 +158,7 @@ app.post('/mint-devnet', async (req, res) => {
 });
 
 app.post('/prepare-devnet-mint', async (req, res) => {
-  req.setTimeout(180000);
+  req.setTimeout(45000);  // ADR-004: 45s < Solana tx timeout
 
   try {
     const ownerPubkey = req.body?.owner_pubkey;
