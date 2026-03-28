@@ -1,44 +1,57 @@
-import dotenv from 'dotenv';
-import { fetchRelayerData } from './packages/core/relayer/index';
-import { buildProverInputs } from './packages/core/prover/inputs';
+import { writeFileSync } from 'fs';
+import path from 'path';
+import { createDevMintFixture, hexToTomlByteArray } from './packages/core';
 
-dotenv.config();
+function proverInputsToToml(inputs: Record<string, unknown>): string {
+  const arrayFields = new Set([
+    'solana_address',
+    'relayer_pubkey_x',
+    'relayer_pubkey_y',
+    'pubkey_x',
+    'pubkey_y',
+    'user_sig',
+    'relayer_sig',
+  ]);
+
+  let toml = '';
+  for (const [key, value] of Object.entries(inputs)) {
+    if (arrayFields.has(key)) {
+      toml += `${key} = ${hexToTomlByteArray(value as string)}\n`;
+      continue;
+    }
+    if (typeof value === 'boolean' || typeof value === 'number') {
+      toml += `${key} = ${value}\n`;
+      continue;
+    }
+    toml += `${key} = "${value}"\n`;
+  }
+  return toml;
+}
 
 async function run() {
-  const pubkeyXBytes = new Uint8Array(32).fill(1).map((_, i) => i + 1); // [1, 2, ..., 32] as in Prover.toml line 10
-  const pubkeyYBytes = new Uint8Array(32).fill(0);
-  const userSig = new Uint8Array(64).fill(0);
-  
-  try {
-    const relayerResponse = await fetchRelayerData(pubkeyXBytes, 'bc1qtest', 1);
-    
-    const inputs = await buildProverInputs({
-      pubkeyXBytes,
-      pubkeyYBytes,
-      userSig,
-      relayerResponse,
-      nullifierSecretHex: '0x123',
-      starknetAddress: '0x0',
-      nonce: 0n,
-      badgeType: 1,
-      tier: 1
-    });
+  const fixture = await createDevMintFixture();
+  const asJson = process.argv.includes('--json');
+  const outputArgIndex = process.argv.indexOf('--output');
+  const outputPath =
+    outputArgIndex >= 0 && process.argv[outputArgIndex + 1]
+      ? path.resolve(process.cwd(), process.argv[outputArgIndex + 1])
+      : null;
 
-    let toml = '';
-    for (const [key, value] of Object.entries(inputs)) {
-      if (Array.isArray(value)) {
-        toml += `${key} = [${value.join(', ')}]\n`;
-      } else if (typeof value === 'boolean') {
-        toml += `${key} = ${value}\n`;
-      } else if (typeof value === 'number') {
-        toml += `${key} = ${value}\n`;
-      } else {
-        toml += `${key} = "${value}"\n`;
-      }
-    }
-    console.log(toml);
-  } catch(e: any) {
-    console.error('FAIL:', e.message);
+  const body = asJson
+    ? JSON.stringify({ prover_inputs: fixture.prover_inputs }, null, 2)
+    : proverInputsToToml(fixture.prover_inputs as unknown as Record<string, unknown>);
+
+  if (outputPath) {
+    writeFileSync(outputPath, body);
+    console.error(`Wrote sample prover inputs to ${outputPath}`);
+    return;
   }
+
+  console.log(body);
 }
-run();
+
+run().catch((error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`FAIL: ${message}`);
+  process.exit(1);
+});

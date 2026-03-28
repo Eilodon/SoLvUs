@@ -1,0 +1,6 @@
+[package]
+name = "legacy_poseidon"
+type = "lib"
+authors = ["Eidolon-V"]
+
+[dependencies]

@@ -96,3 +96,10 @@ garaga-py*/
 build/
 out/
 *.tsbuildinfo
+
+# Large / local artifacts
+solana/target/
+circuits/crs/
+*.tar.xz
+*.tar.gz
+*.zip

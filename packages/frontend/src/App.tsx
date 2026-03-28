@@ -1,339 +1,385 @@
-import { useState } from 'react'
-import { connect } from '@argent/get-starknet'
-import VesuMock from './VesuMock'
+import { useEffect, useState } from 'react'
+import { Connection, PublicKey, Transaction } from '@solana/web3.js'
 
-// --- Constants & Types ---
-const PROVER_SERVER_URL = import.meta.env.VITE_PROVER_SERVER_URL
-// @ts-ignore
-const CONTRACT_ADDRESS = import.meta.env.VITE_CONTRACT_ADDRESS
-// @ts-ignore
-const STARKNET_RPC = import.meta.env.VITE_STARKNET_RPC
-const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === 'true'
+const PROVER_SERVER_URL = import.meta.env.VITE_PROVER_SERVER_URL || 'http://localhost:3001'
+const DEFAULT_DEVNET_CLUSTER = 'https://api.devnet.solana.com'
 
-type BadgeType = 1 | 2 | 3
-type Status = 'idle' | 'connecting' | 'proving' | 'submitting' | 'done' | 'error'
-
-interface BadgeInfo {
-  type: BadgeType
-  tier: number
+const SAMPLE_PROVER_INPUTS = {
+  nullifier_secret: '0x0b785be5a226b8d22eb1633da6f8e988cd5e6618cd00e8d9faffa55cba1f1282',
+  pubkey_x: '0x4f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa',
+  pubkey_y: '0x385b6b1b8ead809ca67454d9683fcf2ba03456d6fe2c4abe2b07f0fbdbb2f1c1',
+  user_sig: '0x5606720c1d220338f3b7bc99cea7dd0e5a36ae56935f818d35a031ee112a34c05bec6e216b8a7934ae5c63609e612e99d657f3622203d05e746119d7cd174182',
+  btc_data: 150000000,
+  relayer_sig: '0xd8e07128dfdc95a9a3f59bc7001f2f3a48157a3e0f6e8eef28ffb535ef73e00e16387aa4124a7a6d1c868726286f7ff74d35d69058270d54650b23c04c4cd753',
+  solana_address: '0x0d4f58e7d1b9f7e28a65194055b6ef8320a6fce8f6af02119df2584c1b0ff812',
+  nonce: '0x17261c1ec623c5854eee1bb12fe05d00231b3842a4da0f8f369eb0cb9318ddff',
+  relayer_pubkey_x: '0x466d7fcae563e5cb09a0d1870bb580344804617879a14949cf22285f1bae3f27',
+  relayer_pubkey_y: '0x6728176c3c6431f8eeda4538dc37c865e2784f3a9e77d044f33e407797e1278a',
+  badge_type: 1,
+  threshold: 100000000,
+  is_upper_bound: false,
+  timestamp: 1762000000,
+  nullifier_hash: '0x1d2d0ca2a3df433de3c2c294ec46b4cef6e9c6d37af62799469e9739675f8d3d',
 }
 
-// --- Icons ---
-const BtcIcon = () => (
-  <svg className="w-6 h-6 text-orange-500" fill="currentColor" viewBox="0 0 24 24">
-    <path d="M14.791 15.319c-.733 2.941-4.493 2.748-4.493 2.748v.03H8.381v-1.89h1.164c1.189 0 1.25-.658 1.25-.658v-4.045s.013-.733-.792-.733H8.381v-1.89h1.917v-.03c0 0 3.195.275 3.654-.853.458-1.127-1.996-1.545-1.996-1.545V4.62h1.917v1.89H15.11V4.62h1.917v1.89h1.164s.733.013.733.792c0 .779-.733.792-.733.792h-1.164v2.748c0 2.941-2.246 4.478-2.246 4.478zm-1.873-1.89h1.164s.733 0 .733-.792c0-.779-.733-.792-.733-.792h-1.164v1.584zm0-3.168h1.164s.733 0 .733-.792c0-.779-.733-.792-.733-.792h-1.164v1.584z"/>
-  </svg>
-)
+interface HealthResponse {
+  prover_backend?: string
+  prover_adapter_mode?: string
+  solvus_program_id?: string
+  devnet_mint?: {
+    clusterUrl?: string
+    feePayer?: string
+    walletPath?: string
+    solvusProgramId?: string
+    groth16VerifierProgramId?: string
+    zkusdMintAddress?: string
+    zkusdMintDecimals?: number
+  }
+  [key: string]: unknown
+}
 
-const StarknetIcon = () => (
-  <svg className="w-6 h-6 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-  </svg>
-)
+interface PhantomProvider {
+  isPhantom?: boolean
+  publicKey?: PublicKey
+  connect: (options?: { onlyIfTrusted?: boolean }) => Promise<{ publicKey: PublicKey }>
+  signTransaction: (transaction: Transaction) => Promise<Transaction>
+}
 
-// --- App Component ---
+declare global {
+  interface Window {
+    solana?: PhantomProvider
+  }
+}
+
+async function sha256Hex(input: string): Promise<string> {
+  const encoded = new TextEncoder().encode(input)
+  const digest = await crypto.subtle.digest('SHA-256', encoded)
+  return `0x${Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('')}`
+}
+
+function decodeBase64(base64: string): Uint8Array {
+  return Uint8Array.from(atob(base64), (char) => char.charCodeAt(0))
+}
+
 function App() {
-  // State
-  const [btcAddress, setBtcAddress] = useState<string | null>(null)
-  const [starknetAddress, setStarknetAddress] = useState<string | null>(null)
-  const [selectedBadge, setSelectedBadge] = useState<BadgeInfo | null>(null)
-  const [status, setStatus] = useState<Status>('idle')
-  const [progressMessage, setProgressMessage] = useState('')
-  const [result, setResult] = useState<{ txHash: string; nullifierHash: string } | null>(null)
-  const [userBadges, setUserBadges] = useState<BadgeInfo[]>([])
-  const [errorHandle, setErrorHandle] = useState<string | null>(null)
+  const [health, setHealth] = useState<HealthResponse | null>(null)
+  const [payload, setPayload] = useState(JSON.stringify({ prover_inputs: SAMPLE_PROVER_INPUTS }, null, 2))
+  const [zkusdAmount, setZkusdAmount] = useState('1000000')
+  const [status, setStatus] = useState<'idle' | 'loading' | 'error' | 'done'>('idle')
+  const [response, setResponse] = useState('')
+  const [error, setError] = useState('')
+  const [walletAddress, setWalletAddress] = useState('')
 
-  // Wallet Handlers
-  const connectXverse = async () => {
-    // Mocking Xverse connection for Demo
-    setBtcAddress('bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh')
-  }
-
-  const connectStarknet = async () => {
-    try {
-      const starknet = await connect()
-      if (starknet?.isConnected) {
-        setStarknetAddress(starknet.selectedAddress)
-      }
-    } catch (e) {
-      console.error(e)
+  const refreshHealth = async () => {
+    const res = await fetch(`${PROVER_SERVER_URL}/health`)
+    if (!res.ok) {
+      throw new Error('Health check failed')
     }
+    const body = (await res.json()) as HealthResponse
+    setHealth(body)
   }
 
-  // Prove & Mint Logic
-  const handleMint = async () => {
-    if (!selectedBadge || !starknetAddress) return
+  useEffect(() => {
+    refreshHealth().catch((err) => setError(err.message))
+  }, [])
 
-    setStatus('proving')
-    setProgressMessage('Signing identity...')
-    setErrorHandle(null)
+  const connectPhantom = async (): Promise<PhantomProvider> => {
+    const provider = window.solana
+    if (!provider?.isPhantom) {
+      throw new Error('Phantom wallet not found in this browser')
+    }
+
+    const connected = await provider.connect()
+    const address = connected.publicKey.toBase58()
+    setWalletAddress(address)
+    return provider
+  }
+
+  const submitProof = async () => {
+    setStatus('loading')
+    setError('')
+    setResponse('')
 
     try {
-      // Step 1: Simulated Delay for Signing/Fetching
-      await new Promise(r => setTimeout(r, 1000))
-      setProgressMessage('Fetching BTC data from Relayer...')
-      await new Promise(r => setTimeout(r, 1500))
-      
-      // Step 2: Call Prover Server (or use Cache in Demo Mode)
-      let data;
-      if (DEMO_MODE) {
-        setProgressMessage('Generating ZK proof (Fast Demo Mode)...')
-        await new Promise(r => setTimeout(r, 1000))
-        const cacheRes = await fetch('/demo/cached_proof.json')
-        if (!cacheRes.ok) throw new Error('Cached proof not found')
-        data = await cacheRes.json()
-      } else {
-        setProgressMessage('Generating ZK proof (this takes ~30s)...')
-        const response = await fetch(`${PROVER_SERVER_URL}/prove`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            starknet_address: starknetAddress,
-            badge_type: selectedBadge.type,
-            tier: selectedBadge.tier,
-            mock: true 
-          })
-        })
-
-        if (!response.ok) throw new Error('Prover failed')
-        data = await response.json()
-      }
-      
-      // Step 3: Submit to Starknet (Simulated or Real if possible)
-      setStatus('submitting')
-      setProgressMessage('Submitting to Starknet...')
-      await new Promise(r => setTimeout(r, 2000))
-
-      setResult({
-        txHash: '0x3f5...8e12', // Mock Tx
-        nullifierHash: data.nullifier_hash || '0xabc...123'
+      const parsed = JSON.parse(payload)
+      const idempotencyKey = await sha256Hex(JSON.stringify(parsed.prover_inputs))
+      const res = await fetch(`${PROVER_SERVER_URL}/prove`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Idempotency-Key': idempotencyKey,
+        },
+        body: JSON.stringify(parsed),
       })
-      
-      setUserBadges([...userBadges, selectedBadge])
+
+      const body = await res.json()
+      if (!res.ok) {
+        throw new Error(body.message || body.error || 'Proof request failed')
+      }
+
+      setResponse(JSON.stringify(body, null, 2))
       setStatus('done')
-      setProgressMessage('Badge minted successfully!')
-    } catch (e: any) {
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error'
+      setError(message)
       setStatus('error')
-      setErrorHandle(e.message)
-      setProgressMessage('Error occurred during process')
     }
   }
 
-  const checkBadges = async () => {
-    // In real app, call is_badge_valid on contract
-    setProgressMessage('Checking badges on Starkscan...')
-    await new Promise(r => setTimeout(r, 1000))
-    // For demo, we use the local state userBadges
+  const mintOnDevnet = async () => {
+    setStatus('loading')
+    setError('')
+    setResponse('')
+
+    try {
+      const parsed = JSON.parse(payload)
+      const res = await fetch(`${PROVER_SERVER_URL}/mint-devnet`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          prover_inputs: parsed.prover_inputs,
+          zkusd_amount: Number(zkusdAmount),
+        }),
+      })
+
+      const body = await res.json()
+      if (!res.ok) {
+        throw new Error(body.message || body.error || 'Devnet mint failed')
+      }
+
+      setResponse(JSON.stringify(body, null, 2))
+      setStatus('done')
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error'
+      setError(message)
+      setStatus('error')
+    }
+  }
+
+  const mintWithPhantom = async () => {
+    setStatus('loading')
+    setError('')
+    setResponse('')
+
+    try {
+      const provider = await connectPhantom()
+      const ownerPubkey = provider.publicKey?.toBase58()
+      if (!ownerPubkey) {
+        throw new Error('Phantom wallet is connected without a public key')
+      }
+
+      const prepareRes = await fetch(`${PROVER_SERVER_URL}/prepare-devnet-mint`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          owner_pubkey: ownerPubkey,
+          zkusd_amount: Number(zkusdAmount),
+        }),
+      })
+
+      const prepared = await prepareRes.json()
+      if (!prepareRes.ok) {
+        throw new Error(prepared.message || prepared.error || 'Prepare devnet mint failed')
+      }
+
+      if (prepared.prover_inputs) {
+        setPayload(JSON.stringify({ prover_inputs: prepared.prover_inputs }, null, 2))
+      }
+
+      if (prepared.cached || !prepared.serialized_transaction) {
+        setResponse(JSON.stringify(prepared, null, 2))
+        setStatus('done')
+        return
+      }
+
+      const clusterUrl =
+        typeof prepared.cluster_url === 'string'
+          ? prepared.cluster_url
+          : health?.devnet_mint?.clusterUrl || DEFAULT_DEVNET_CLUSTER
+      const connection = new Connection(clusterUrl, 'confirmed')
+      const transaction = Transaction.from(decodeBase64(prepared.serialized_transaction))
+      const signedTransaction = await provider.signTransaction(transaction)
+      const signature = await connection.sendRawTransaction(signedTransaction.serialize())
+      await connection.confirmTransaction(signature, 'confirmed')
+
+      setResponse(
+        JSON.stringify(
+          {
+            ...prepared,
+            submitted_signature: signature,
+          },
+          null,
+          2,
+        ),
+      )
+      setStatus('done')
+      await refreshHealth()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown Phantom mint error'
+      setError(message)
+      setStatus('error')
+    }
   }
 
   return (
-    <div className="min-h-screen w-full flex flex-col items-center bg-black text-slate-100 p-4 md:p-8">
-      {/* Header */}
-      <header className="w-full max-w-4xl flex justify-between items-center mb-12">
-        <div className="flex items-center gap-2">
-          <div className="w-10 h-10 rounded-lg bg-blue-600 flex items-center justify-center shadow-lg shadow-blue-900/20">
-            <span className="font-bold text-xl">S</span>
+    <div className="min-h-screen bg-stone-950 text-stone-100">
+      <div className="mx-auto flex max-w-6xl flex-col gap-10 px-4 py-10 md:px-8">
+        <header className="rounded-[2rem] border border-amber-200/10 bg-[radial-gradient(circle_at_top_left,_rgba(245,158,11,0.18),_transparent_45%),linear-gradient(135deg,_rgba(12,10,9,0.98),_rgba(28,25,23,0.94))] p-8 shadow-2xl shadow-black/30">
+          <div className="flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
+            <div className="max-w-2xl">
+              <p className="text-xs font-semibold uppercase tracking-[0.35em] text-amber-300/80">Solvus Protocol</p>
+              <h1 className="mt-3 text-4xl font-black tracking-tight text-stone-50 md:text-5xl">Solana Runtime Scaffold</h1>
+              <p className="mt-4 text-sm leading-7 text-stone-300">
+                UI này bám flow Phase 1 trong docs: Relayer -&gt; Noir -&gt; Prover Server -&gt; Solana Anchor.
+              </p>
+            </div>
+            <div className="grid gap-3 rounded-3xl border border-amber-300/10 bg-stone-900/70 p-5 text-sm text-stone-300">
+              <div className="flex items-center justify-between gap-8">
+                <span>Prover Server</span>
+                <span className="font-mono text-amber-200">{PROVER_SERVER_URL}</span>
+              </div>
+              <div className="flex items-center justify-between gap-8">
+                <span>Backend</span>
+                <span className="font-mono text-emerald-300">{String(health?.prover_backend || 'unknown')}</span>
+              </div>
+              <div className="flex items-center justify-between gap-8">
+                <span>Adapter</span>
+                <span className="font-mono text-amber-200">{String(health?.prover_adapter_mode || 'unknown')}</span>
+              </div>
+              <div className="flex items-center justify-between gap-8">
+                <span>Status</span>
+                <span className="font-mono text-sky-300">{health ? 'online' : 'pending'}</span>
+              </div>
+              <div className="flex items-center justify-between gap-8">
+                <span>Solvus Program</span>
+                <span className="font-mono text-cyan-200">{String(health?.solvus_program_id || 'unknown')}</span>
+              </div>
+              <div className="flex items-center justify-between gap-8">
+                <span>Wallet</span>
+                <span className="font-mono text-fuchsia-200">{walletAddress || 'phantom disconnected'}</span>
+              </div>
+            </div>
           </div>
-          <div>
-            <h1 className="text-xl font-black tracking-tight">SOLVUS</h1>
-            <p className="text-[10px] text-slate-400 font-mono">PROTOCOL V1 | SEPOLIA</p>
-          </div>
-        </div>
-        <div className="flex gap-3">
-          <BtcIcon />
-          <StarknetIcon />
-        </div>
-      </header>
+        </header>
 
-      <main className="w-full max-w-4xl space-y-8">
-        
-        {/* Section 1: Connect Wallets */}
-        <section className="glass rounded-2xl p-6 border-white/5">
-          <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-widest mb-4">Section 1 — Connect Wallets</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <button 
-              onClick={connectXverse}
-              className={`flex items-center justify-center gap-3 py-3 px-6 rounded-xl font-bold transition-all ${
-                btcAddress ? 'bg-orange-500/20 text-orange-400 border border-orange-500/30' : 'bg-orange-500 text-white hover:bg-orange-600'
-              }`}
-            >
-              <BtcIcon />
-              {btcAddress ? `${btcAddress.slice(0, 6)}...${btcAddress.slice(-4)}` : 'Connect Xverse (BTC)'}
-            </button>
-            <button 
-              onClick={connectStarknet}
-              className={`flex items-center justify-center gap-3 py-3 px-6 rounded-xl font-bold transition-all ${
-                starknetAddress ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' : 'bg-blue-500 text-white hover:bg-blue-600'
-              }`}
-            >
-              <StarknetIcon />
-              {starknetAddress ? `${starknetAddress.slice(0, 6)}...${starknetAddress.slice(-4)}` : 'Connect Starknet'}
-            </button>
-          </div>
+        <section className="grid gap-4 md:grid-cols-4">
+          {[
+            ['Identity', 'Compact secp256k1 user signature -> SHA-512 nullifier secret'],
+            ['Relayer', 'BTC state lookup + signed commitment bound to user pubkey'],
+            ['Prover', 'Noir inputs, deterministic nonce, cached /prove request'],
+            ['Solana', 'Anchor mint/burn/PendingBtcRelease state machine'],
+          ].map(([title, desc]) => (
+            <article key={title} className="rounded-[1.5rem] border border-stone-800 bg-stone-900/70 p-5">
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">{title}</p>
+              <p className="mt-3 text-sm leading-6 text-stone-300">{desc}</p>
+            </article>
+          ))}
         </section>
 
-        {/* Section 2: Select Badge */}
-        <section className="glass rounded-2xl p-6 border-white/5">
-          <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-widest mb-4">Section 2 — Select Badge</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {/* Whale Badge */}
-            <div 
-              className={`badge-card ${selectedBadge?.type === 1 ? 'selected' : ''}`}
-              onClick={() => setSelectedBadge({ type: 1, tier: 1 })}
-            >
-              <div className="text-3xl mb-2">🐋</div>
-              <h3 className="font-bold text-lg">Whale Badge</h3>
-              <p className="text-xs text-slate-400 mb-4">Hold large BTC balance</p>
-              <div className="space-y-2">
-                {[1, 2, 3, 4].map(t => (
-                  <button 
-                    key={t}
-                    onClick={(e) => { e.stopPropagation(); setSelectedBadge({ type: 1, tier: t }) }}
-                    className={`w-full py-1 text-[10px] rounded border ${
-                      selectedBadge?.type === 1 && selectedBadge.tier === t ? 'bg-blue-500 border-blue-400' : 'border-slate-700 hover:border-slate-500'
-                    }`}
-                  >
-                    Tier {t}: {t === 1 ? '0.1' : t === 2 ? '0.5' : t === 3 ? '1.0' : '5.0'} BTC
-                  </button>
-                ))}
+        <section className="grid gap-8 lg:grid-cols-[1.15fr_0.85fr]">
+          <article className="rounded-[2rem] border border-stone-800 bg-stone-900/70 p-6">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.25em] text-cyan-300/80">POST /prove</p>
+                <h2 className="mt-2 text-2xl font-bold text-stone-50">Prover Inputs Composer</h2>
+              </div>
+              <div className="flex flex-wrap gap-3">
+                <button
+                  onClick={() => {
+                    setStatus('loading')
+                    setError('')
+                    connectPhantom()
+                      .then(() => setStatus('done'))
+                      .catch((err) => {
+                        setError(err instanceof Error ? err.message : 'Unknown Phantom connect error')
+                        setStatus('error')
+                      })
+                  }}
+                  disabled={status === 'loading'}
+                  className="rounded-full border border-fuchsia-300/40 bg-fuchsia-300/10 px-5 py-2 text-sm font-bold text-fuchsia-100 transition hover:bg-fuchsia-300/20 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Connect Phantom
+                </button>
+                <button
+                  onClick={submitProof}
+                  disabled={status === 'loading'}
+                  className="rounded-full bg-cyan-300 px-5 py-2 text-sm font-bold text-stone-950 transition hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {status === 'loading' ? 'Working...' : 'Generate Proof'}
+                </button>
               </div>
             </div>
 
-            {/* Hodler Badge */}
-            <div 
-              className={`badge-card ${selectedBadge?.type === 2 ? 'selected' : ''}`}
-              onClick={() => setSelectedBadge({ type: 2, tier: 1 })}
-            >
-              <div className="text-3xl mb-2">⏳</div>
-              <h3 className="font-bold text-lg">Hodler Badge</h3>
-              <p className="text-xs text-slate-400 mb-4">Oldest UTXO age</p>
-              <div className="space-y-2">
-                {[1, 2].map(t => (
-                  <button 
-                    key={t}
-                    onClick={(e) => { e.stopPropagation(); setSelectedBadge({ type: 2, tier: t }) }}
-                    className={`w-full py-1 text-[10px] rounded border ${
-                      selectedBadge?.type === 2 && selectedBadge.tier === t ? 'bg-blue-500 border-blue-400' : 'border-slate-700 hover:border-slate-500'
-                    }`}
-                  >
-                    Tier {t}: {t === 1 ? '180' : '365'} Days
-                  </button>
-                ))}
+            <p className="mt-4 text-sm leading-6 text-stone-400">
+              `Mint On Devnet` dùng ví CLI cục bộ. `Mint With Phantom` sẽ xin server chuẩn bị prover inputs mới, partial-sign fee payer, rồi để Phantom ký owner và broadcast.
+            </p>
+
+            <div className="mt-5 grid gap-3 rounded-[1.5rem] border border-stone-800 bg-stone-950/60 p-4 lg:grid-cols-[auto_auto_1fr] lg:items-center">
+              <label className="flex items-center gap-3 text-sm text-stone-300">
+                <span>zkUSD Amount</span>
+                <input
+                  value={zkusdAmount}
+                  onChange={(event) => setZkusdAmount(event.target.value)}
+                  className="w-36 rounded-full border border-stone-700 bg-stone-900 px-4 py-2 font-mono text-xs text-stone-100 outline-none"
+                />
+              </label>
+              <div className="flex flex-wrap gap-3">
+                <button
+                  onClick={mintOnDevnet}
+                  disabled={status === 'loading'}
+                  className="rounded-full bg-emerald-300 px-5 py-2 text-sm font-bold text-stone-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  CLI Mint On Devnet
+                </button>
+                <button
+                  onClick={mintWithPhantom}
+                  disabled={status === 'loading'}
+                  className="rounded-full bg-fuchsia-300 px-5 py-2 text-sm font-bold text-stone-950 transition hover:bg-fuchsia-200 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Mint With Phantom
+                </button>
               </div>
+              <p className="text-xs leading-6 text-stone-500">
+                Server vẫn là fee payer. Phantom chỉ cần ký owner nên user không phải nạp devnet SOL để test UI flow.
+              </p>
             </div>
 
-            {/* Stacker Badge */}
-            <div 
-              className={`badge-card ${selectedBadge?.type === 3 ? 'selected' : ''}`}
-              onClick={() => setSelectedBadge({ type: 3, tier: 1 })}
-            >
-              <div className="text-3xl mb-2">🧱</div>
-              <h3 className="font-bold text-lg">Stacker Badge</h3>
-              <p className="text-xs text-slate-400 mb-4">Total number of UTXOs</p>
-              <div className="space-y-2">
-                {[1, 2, 3].map(t => (
-                  <button 
-                    key={t}
-                    onClick={(e) => { e.stopPropagation(); setSelectedBadge({ type: 3, tier: t }) }}
-                    className={`w-full py-1 text-[10px] rounded border ${
-                      selectedBadge?.type === 3 && selectedBadge.tier === t ? 'bg-blue-500 border-blue-400' : 'border-slate-700 hover:border-slate-500'
-                    }`}
-                  >
-                    Tier {t}: {t === 1 ? '5' : t === 2 ? '15' : '30'} UTXOs
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
+            <textarea
+              value={payload}
+              onChange={(event) => setPayload(event.target.value)}
+              className="mt-5 min-h-[28rem] w-full rounded-[1.5rem] border border-stone-800 bg-stone-950/80 p-4 font-mono text-xs leading-6 text-stone-200 outline-none ring-0"
+              spellCheck={false}
+            />
+          </article>
+
+          <aside className="grid gap-6">
+            <article className="rounded-[2rem] border border-stone-800 bg-stone-900/70 p-6">
+              <p className="text-xs font-semibold uppercase tracking-[0.25em] text-stone-500">Health</p>
+              <pre className="mt-4 overflow-auto rounded-[1.25rem] bg-stone-950/80 p-4 text-xs leading-6 text-stone-200">
+                {JSON.stringify(health, null, 2)}
+              </pre>
+            </article>
+
+            <article className="rounded-[2rem] border border-stone-800 bg-stone-900/70 p-6">
+              <p className="text-xs font-semibold uppercase tracking-[0.25em] text-emerald-300/80">Response</p>
+              <pre className="mt-4 min-h-[12rem] overflow-auto rounded-[1.25rem] bg-stone-950/80 p-4 text-xs leading-6 text-stone-200">
+                {response || 'No proof or mint response yet.'}
+              </pre>
+            </article>
+
+            <article className="rounded-[2rem] border border-red-500/20 bg-red-950/20 p-6">
+              <p className="text-xs font-semibold uppercase tracking-[0.25em] text-red-300/80">Error</p>
+              <p className="mt-4 text-sm leading-6 text-red-200">{error || 'No errors.'}</p>
+            </article>
+          </aside>
         </section>
-
-        {/* Section 3: Prove & Mint */}
-        <section className="glass rounded-2xl p-6 border-white/5 text-center">
-          <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-widest mb-6 text-left">Section 3 — Prove & Mint</h2>
-          
-          <button
-            disabled={!btcAddress || !starknetAddress || !selectedBadge || status === 'proving' || status === 'submitting'}
-            onClick={handleMint}
-            className="w-full max-w-md bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 py-4 rounded-xl font-bold text-lg shadow-xl shadow-blue-900/20 transition-all disabled:opacity-50 disabled:grayscale"
-          >
-            {status === 'idle' && 'Generate ZK Proof & Mint Badge'}
-            {(status === 'proving' || status === 'submitting') && 'Processing...'}
-            {status === 'done' && 'Mint Another Badge'}
-            {status === 'error' && 'Retry Minting'}
-          </button>
-
-          {status !== 'idle' && (
-            <div className="mt-6 flex flex-col items-center">
-              <div className="flex items-center gap-3 mb-2">
-                {(status === 'proving' || status === 'submitting') && (
-                  <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-                )}
-                <span className={`text-sm font-medium ${status === 'error' ? 'text-red-400' : 'text-blue-400'}`}>
-                  {progressMessage}
-                </span>
-              </div>
-              
-              {status === 'done' && result && (
-                <div className="mt-4 p-4 rounded-lg bg-emerald-500/10 border border-emerald-500/30 w-full text-left">
-                  <p className="text-xs text-emerald-400 font-mono mb-1">TX HASH: {result.txHash}</p>
-                  <p className="text-xs text-emerald-400 font-mono">NULLIFIER: {result.nullifierHash}</p>
-                  <a 
-                    href={`https://sepolia.starkscan.co/tx/${result.txHash}`} 
-                    target="_blank" 
-                    rel="noreferrer"
-                    className="mt-3 inline-block text-xs font-bold text-white underline"
-                  >
-                    View on Starkscan
-                  </a>
-                </div>
-              )}
-
-              {status === 'error' && errorHandle && (
-                <p className="mt-2 text-xs text-red-500 font-mono italic">{errorHandle}</p>
-              )}
-            </div>
-          )}
-        </section>
-
-        {/* Section 4: Verify Badge */}
-        <section className="glass rounded-2xl p-6 border-white/5">
-          <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-widest mb-4">Section 4 — Verify Badge</h2>
-          <div className="space-y-4">
-            <div className="flex gap-2">
-              <input 
-                type="text" 
-                placeholder="Enter Starknet Address" 
-                value={starknetAddress || ''}
-                readOnly
-                className="flex-1 bg-white/5 border border-white/10 rounded-lg px-4 py-2 text-sm font-mono focus:outline-none focus:border-blue-500/50"
-              />
-              <button 
-                onClick={checkBadges}
-                className="bg-white/10 hover:bg-white/20 px-4 py-2 rounded-lg text-sm font-bold border border-white/10"
-              >
-                Check Badges
-              </button>
-            </div>
-
-            {userBadges.length > 0 && (
-              <div className="flex flex-wrap gap-2 pt-2">
-                {userBadges.map((b, i) => (
-                  <span key={i} className="px-3 py-1 rounded-full bg-blue-500/20 text-blue-400 text-[10px] font-bold border border-blue-500/30">
-                    {b.type === 1 ? 'Whale' : b.type === 2 ? 'Hodler' : 'Stacker'} (Tier {b.tier})
-                  </span>
-                ))}
-              </div>
-            )}
-
-            <VesuMock starknetAddress={starknetAddress} badges={userBadges} />
-          </div>
-        </section>
-
-      </main>
-
-      <footer className="mt-12 text-slate-600 text-[10px] uppercase tracking-widest">
-        POWERED BY NOIR ZKP & STARKNET
-      </footer>
+      </div>
     </div>
   )
 }

@@ -6,8 +6,6 @@
   "dependencies": {
     "@noble/curves": "^1.4.0",
     "@noble/hashes": "^1.4.0",
-    "circomlibjs": "0.1.7",
-    "dotenv": "^16.4.5",
-    "sats-connect": "^2.1.0"
+    "circomlibjs": "0.1.7"
   }
 }

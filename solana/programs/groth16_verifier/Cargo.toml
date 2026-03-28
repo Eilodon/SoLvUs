@@ -1,0 +1,11 @@
+[package]
+name = "groth16_verifier"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "groth16_verifier"
+
+[dependencies]
+solana-program = { version = "2.3.0", default-features = false }

@@ -7,11 +7,23 @@
   ],
   "scripts": {
     "dev": "npm run dev --workspace=@solvus/frontend",
-    "server": "ts-node packages/prover-server/prover_server.ts"
+    "server": "TS_NODE_FILES=true ts-node packages/prover-server/prover_server.ts",
+    "sample:prover-inputs": "TS_NODE_FILES=true ts-node generate_prover_toml.ts",
+    "sample:verifier-manifest": "TS_NODE_FILES=true ts-node generate_verifier_manifest.ts",
+    "sample:relayer": "TS_NODE_FILES=true ts-node verify_relayer.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "solana:check": "cargo check --manifest-path solana/Cargo.toml",
+    "groth16:build-verifier": "bash scripts/build-real-verifier.sh",
+    "solana:deploy:devnet": "bash scripts/deploy-devnet.sh",
+    "solana:init:protocol-config": "node scripts/init-protocol-config.mjs"
   },
   "dependencies": {
+    "@aztec/bb.js": "0.87.9",
     "@noble/curves": "^1.4.0",
     "@noble/hashes": "^1.4.0",
+    "@noir-lang/noir_js": "1.0.0-beta.3",
+    "@solana/spl-token": "^0.4.14",
+    "@solana/web3.js": "^1.98.4",
     "@types/body-parser": "^1.19.6",
     "@types/cors": "^2.8.19",
     "@types/dotenv": "^6.1.1",
@@ -20,13 +32,9 @@
     "circomlibjs": "0.1.7",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
-    "express": "^5.2.1",
-    "garaga": "^1.0.1",
-    "puppeteer": "^24.38.0",
-    "starknet": "^7.1.0"
+    "express": "^5.2.1"
   },
   "devDependencies": {
-    "@aztec/bb.js": "^4.0.4",
     "@types/node": "^20.0.0",
     "ts-node": "^10.9.0",
     "typescript": "^5.4.0"

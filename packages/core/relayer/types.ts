@@ -1,7 +1,28 @@
-export interface RelayerResponse {
-  btc_data: number;
-  timestamp: number;
-  relayer_sig_s:    string; // Field hex "0x..."
-  relayer_sig_r8_x: string; // Field hex "0x..."
-  relayer_sig_r8_y: string; // Field hex "0x..."
+import { BadgeType, Hex, RelayerResponse } from '../contracts';
+
+export interface Utxo {
+  value: number;
+  block_time: number;
 }
+
+export interface BitcoinIndexer {
+  getBalance(btcAddress: string): Promise<number>;
+  getUtxos(btcAddress: string): Promise<Utxo[]>;
+  hasActiveDlc?(btcAddress: string): Promise<boolean>;
+}
+
+export interface RelayerSigner {
+  getPublicKeyXY(): Promise<{ pubkey_x: Hex; pubkey_y: Hex }>;
+  signCommitment(commitment: Hex): Promise<Hex>;
+}
+
+export interface FetchRelayerDataParams {
+  btcAddress: string;
+  badgeType: BadgeType;
+  userPubkeyX: Hex;
+  indexer: BitcoinIndexer;
+  signer: RelayerSigner;
+  now?: number;
+}
+
+export type { RelayerResponse };

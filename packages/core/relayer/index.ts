@@ -1,69 +1,117 @@
-import { buildEddsa, buildPoseidon } from 'circomlibjs';
-import { u64ToBigEndian } from '../shared/utils';
-import { RelayerResponse } from './types';
+import { secp256k1 } from '@noble/curves/secp256k1';
+import { BadgeType, Hex, RelayerResponse, RELAYER_SIG_EXPIRY } from '../contracts';
+import {
+  bytesToHex,
+  fieldToBytes32BE,
+  hexToBytes,
+  normalizeHex,
+  poseidonHash,
+  splitBytes32To128BitFields,
+  validateBitcoinAddress,
+  validateBytesLength,
+} from '../shared/utils';
+import { BitcoinIndexer, FetchRelayerDataParams, RelayerSigner, Utxo } from './types';
 
-const xverseApi = {
-  getBalance: async (address: string) => ({ balance: 0 }),
-  getUtxos: async (address: string) => [] as { block_time: number }[],
-};
+function computeOldestUtxoAgeInDays(utxos: Utxo[], now: number): number {
+  if (utxos.length === 0) {
+    return 0;
+  }
 
-async function getBtcData(btcAddress: string, badgeType: number, timestamp: number): Promise<number> {
-  if (badgeType === 1) { // Whale
-    const { balance } = await xverseApi.getBalance(btcAddress);
-    return balance;
-  }
-  if (badgeType === 2) { // Hodler
-    const utxos = await xverseApi.getUtxos(btcAddress);
-    if (utxos.length === 0) return 0;
-    const oldest = utxos.reduce((min: number, u: any) => Math.min(min, u.block_time), Infinity);
-    return Math.floor((timestamp - oldest) / 86400);
-  }
-  if (badgeType === 3) { // Stacker
-    const utxos = await xverseApi.getUtxos(btcAddress);
-    return utxos.length;
-  }
-  throw new Error(`Unknown badge_type: ${badgeType}`);
+  const oldest = utxos.reduce((currentOldest, utxo) => Math.min(currentOldest, utxo.block_time), Infinity);
+  return Math.floor((now - oldest) / 86400);
 }
 
-export async function fetchRelayerData(
-  pubkeyXBytes: Uint8Array,
-  btcAddress: string,
-  badgeType: number,
-  relayerKey?: string,
-  forcedTimestamp?: number
-): Promise<RelayerResponse> {
-  const privateKeyHex = (relayerKey || process.env.RELAYER_EDDSA_PRIVATE_KEY || '').replace('0x','');
-  if (!privateKeyHex) throw new Error('RELAYER_EDDSA_PRIVATE_KEY is not set.');
+async function computeBtcData(indexer: BitcoinIndexer, btcAddress: string, badgeType: BadgeType, now: number): Promise<number> {
+  switch (badgeType) {
+    case BadgeType.Whale:
+      return indexer.getBalance(btcAddress);
+    case BadgeType.Hodler:
+      return computeOldestUtxoAgeInDays(await indexer.getUtxos(btcAddress), now);
+    case BadgeType.Stacker:
+      return (await indexer.getUtxos(btcAddress)).length;
+    default:
+      throw new Error(`Unsupported badge type: ${badgeType}`);
+  }
+}
 
-  const eddsa = await buildEddsa();
-  const poseidon = await buildPoseidon();
+export async function computeRelayerCommitment(
+  userPubkeyX: Hex,
+  btcData: number,
+  timestamp: number,
+): Promise<Hex> {
+  validateBytesLength(userPubkeyX, 32, 'user_pubkey_x');
+  const [x_hi, x_lo] = splitBytes32To128BitFields(userPubkeyX);
+  const commitment = await poseidonHash([x_hi, x_lo, BigInt(btcData), BigInt(timestamp)]);
+  return bytesToHex(fieldToBytes32BE(commitment));
+}
 
-  // INV-05: Single Source of Truth for Time. 
-  // Relayer originates the time, but can be forced for testing/determinism.
-  const timestamp = forcedTimestamp || Math.floor(Date.now() / 1000);
-  
-  const response: RelayerResponse = {
+export class Secp256k1EnvRelayerSigner implements RelayerSigner {
+  constructor(private readonly privateKeyHex: Hex) {}
+
+  async getPublicKeyXY(): Promise<{ pubkey_x: Hex; pubkey_y: Hex }> {
+    const uncompressed = secp256k1.getPublicKey(hexToBytes(this.privateKeyHex), false);
+    return {
+      pubkey_x: bytesToHex(uncompressed.slice(1, 33)),
+      pubkey_y: bytesToHex(uncompressed.slice(33, 65)),
+    };
+  }
+
+  async signCommitment(commitment: Hex): Promise<Hex> {
+    validateBytesLength(commitment, 32, 'commitment');
+    const signature = secp256k1.sign(hexToBytes(commitment), hexToBytes(this.privateKeyHex), {
+      lowS: true,
+      prehash: false,
+    });
+    return bytesToHex(signature.toCompactRawBytes());
+  }
+}
+
+export async function fetchRelayerData(params: FetchRelayerDataParams): Promise<RelayerResponse> {
+  const now = params.now ?? Math.floor(Date.now() / 1000);
+  validateBitcoinAddress(params.btcAddress);
+  validateBytesLength(params.userPubkeyX, 32, 'user_pubkey_x');
+
+  if (params.indexer.hasActiveDlc && (await params.indexer.hasActiveDlc(params.btcAddress))) {
+    throw new Error(`BTC address ${params.btcAddress} is already locked in an active DLC`);
+  }
+
+  const btc_data = await computeBtcData(params.indexer, params.btcAddress, params.badgeType, now);
+  if (btc_data <= 0) {
+    throw new Error('No UTXOs found');
+  }
+
+  const timestamp = now;
+  const commitment = await computeRelayerCommitment(params.userPubkeyX, btc_data, timestamp);
+  const signature = await params.signer.signCommitment(commitment);
+  const publicKey = await params.signer.getPublicKeyXY();
+
+  return {
+    btc_data,
     timestamp,
-    btc_data: 0,
-    relayer_sig_s: '',
-    relayer_sig_r8_x: '',
-    relayer_sig_r8_y: '',
+    pubkey_x: publicKey.pubkey_x,
+    pubkey_y: publicKey.pubkey_y,
+    signature,
   };
+}
 
-  response.btc_data = await getBtcData(btcAddress, badgeType, response.timestamp);
+export class MockBitcoinIndexer implements BitcoinIndexer {
+  constructor(
+    private readonly balance = 150_000_000,
+    private readonly utxos: Utxo[] = [
+      { value: 90_000_000, block_time: 1_700_000_000 },
+      { value: 60_000_000, block_time: 1_710_000_000 },
+    ],
+  ) {}
 
-  const x_hi = BigInt('0x' + Buffer.from(pubkeyXBytes.slice(0, 16)).toString('hex'));
-  const x_lo = BigInt('0x' + Buffer.from(pubkeyXBytes.slice(16, 32)).toString('hex'));
-  
-  const payloadHashBuffer = poseidon([x_hi, x_lo, BigInt(response.btc_data), BigInt(response.timestamp)]);
-  const payloadHash = eddsa.F.e(poseidon.F.toObject(payloadHashBuffer));
+  async getBalance(): Promise<number> {
+    return this.balance;
+  }
 
-  const privKey = Buffer.from(privateKeyHex, 'hex');
-  const signature = eddsa.signPoseidon(privKey, payloadHash);
+  async getUtxos(): Promise<Utxo[]> {
+    return this.utxos;
+  }
 
-  response.relayer_sig_s = '0x' + BigInt(signature.S).toString(16).padStart(64, '0');
-  response.relayer_sig_r8_x = '0x' + eddsa.F.toObject(signature.R8[0]).toString(16).padStart(64, '0');
-  response.relayer_sig_r8_y = '0x' + eddsa.F.toObject(signature.R8[1]).toString(16).padStart(64, '0');
-
-  return response;
+  async hasActiveDlc(): Promise<boolean> {
+    return false;
+  }
 }

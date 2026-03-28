@@ -1,71 +1,60 @@
 # Solvus Protocol
-### Bitcoin Financial Identity Layer for Starknet
-> Prove your Bitcoin worth. Unlock DeFi. Stay private.
+Bitcoin-collateralized zkUSD on Solana, driven from the specs in `docs/ADR.md`, `docs/BLUEPRINT.md`, and `docs/CONTRACTS.md`.
 
-## The Problem
-Bitcoin holders sitting on life-changing wealth cannot access DeFi because protocols require wrapping BTC and exposing financial history on-chain. Currently, there's no way to prove "I'm a serious Bitcoin holder" without revealing your exact balance or Bitcoin address, leading to a massive capital inefficiency for long-term satoshi stackers.
-
-## The Solution
-Solvus lets Bitcoin holders prove solvency and holding behavior on Starknet using ZK proofs — without ever revealing their Bitcoin address, balance, or transaction history. A Whale Badge proves you hold above a threshold. A Hodler Badge proves long-term commitment. All verified on-chain, preserving absolute privacy for the user while providing reliability for protocols.
-
-## How It Works
+## Architecture
 ```text
-  BTC Wallet (Xverse)
-       │ sign identity
-       ▼
-  [Relayer] verify BTC data via Xverse API
-       │ sign attestation
-       ▼  
-  [Noir ZK Circuit] dual ECDSA verify + threshold check
-       │ generate proof
-       ▼
-  [Cairo Contract] verify proof via Garaga → mint badge
+Xverse / BTC wallet
+  -> user signature -> nullifier secret
+Relayer
+  -> BTC data + signed commitment
+Noir circuit
+  -> threshold proof + nullifier hash
+Prover Server
+  -> idempotent /prove API
+Solana Anchor
+  -> verify proof, init PDA, mint / burn zkUSD
 ```
 
-**Step 1:** Connect Xverse wallet and sign a deterministic identity message.  
-**Step 2:** Relayer fetches your real-time BTC data (balance/UTXO age) — data is processed but never stored.  
-**Step 3:** A ZK proof is generated locally: it proves your data meets a chosen threshold without revealing the actual value.  
-**Step 4:** A soulbound Badge is minted on Starknet — instantly usable by any DeFi protocol to grant you better terms.
+## Repo Layout
+- `packages/core`: source-of-truth TypeScript contracts, relayer flow, nonce/nullifier logic, and deterministic dev fixtures.
+- `packages/prover-server`: `/health` and `/prove` API with idempotency cache.
+- `packages/frontend`: Solana-oriented runtime shell for proof requests.
+- `circuits`: Noir circuit and prover input fixtures.
+- `solana`: Anchor workspace for `solvus` and `liquidation` programs.
+- `docs`: ADRs, blueprint, and contracts that define the intended behavior.
 
-## Badge Types
-| Badge Type | Basis | Tiers | Thresholds |
-|---|---|---|---|
-| **Whale** | BTC Balance | 1 - 4 | 0.1, 0.5, 1.0, 5.0 BTC |
-| **Hodler** | Oldest UTXO Age | 1 - 2 | 180, 365 Days |
-| **Stacker** | Total UTXOs | 1 - 3 | 5, 15, 30 UTXOs |
+## Current Status
+- Legacy execution paths have been removed from the executable repo.
+- Core schema, Noir inputs, frontend, and Anchor scaffold are aligned to the Solana design.
+- Groth16 is the active proving path: Noir exposes only `nullifier_hash` as a public input, the prover server returns real `proof + public_inputs`, and `solvus` forwards the canonical verifier payload over CPI.
+- Devnet bring-up has been verified with the real Sunspot/Groth16 runtime, including `program deploy`, `update_protocol_config`, and a successful `mint_zkusd` smoke test.
 
-## DeFi Integration
-```typescript
-// Any Starknet protocol can verify in 1 line:
-assert(solvus.is_badge_valid(borrower, WHALE_BADGE, tier: 2),
-       "Need Whale Badge Tier 2+ to borrow");
-```
-
-## Tech Stack
-- **ZK Circuit:** Noir (Aztec) — utilizing dual secp256k1 ECDSA verification + Poseidon nullifiers.
-- **On-chain Verification:** Garaga verifier deployed on Starknet Sepolia.
-- **Smart Contract:** Cairo — implementing 9-assertion proof verification and soulbound registry.
-- **Bitcoin Wallet:** Xverse SDK — utilizing compact 64-byte signature format.
-- **Privacy:** `pubkey_x` and `pubkey_y` never leave the ZK circuit environment.
-
-## Live Demo
-- **Testnet contract:** [0x7735...9a9 (Sepolia)](https://sepolia.voyager.online/contract/0x773545d7b7a99dca4cf0d9b7414fbc4cbf24703dd83a23e1de394c8b67e99a9)
-- **Demo Site:** [Live on Vercel (Coming Soon) / See video in walkthrough.md]
-
-## Security Design
-- **Nullifier:** Prevents double-minting the same badge type from the same Bitcoin address.
-- **72h Expiry:** Forces regular proof renewal to mitigate price/balance volatility and flash loan attacks.
-- **Relayer Attestation:** Relayer signs BTC data + timestamp to prevent user-side data tampering.
-- **Private Inputs:** Bitcoin public keys are private inputs to the circuit — addresses never appear on-chain.
+## Devnet Runbook
+The current devnet procedure, known-good program IDs, verified transaction signatures, and the compute-budget requirement for `mint_zkusd` are documented in [`docs/DEVNET_RUNBOOK.md`](docs/DEVNET_RUNBOOK.md).
 
 ## Setup
 ```bash
-# Install dependencies
 npm install
 
-# Run Prover Server (Terminal 1)
+# Run prover server
 npm run server
 
-# Run Demo UI (Terminal 2)
-cd ui && npm install && npm run dev
+# Run frontend
+npm run dev --workspace=@solvus/frontend
+
+# Check TypeScript + Solana workspace
+npm run typecheck
+npm run solana:check
+
+# Build the real Groth16 verifier from Sunspot artifacts
+npm run groth16:build-verifier
+
+# Deploy verifier + solvus to devnet
+npm run solana:deploy:devnet
+
+# Sync ProtocolConfig with the deployed verifier program id
+npm run solana:init:protocol-config
+
+# Generate deterministic sample inputs
+npm run sample:prover-inputs
 ```

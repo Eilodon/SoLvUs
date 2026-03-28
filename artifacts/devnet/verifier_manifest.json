@@ -1,0 +1,8 @@
+{
+  "mode": "artifact-verifier",
+  "artifact_path": "artifacts/devnet/groth16_fixture.json",
+  "proof_bytes": 5166,
+  "public_inputs_bytes": 288,
+  "proof_sha256": "0x71a5285d312f72254aa342e7ee2702484f885a88670c95258e74a39ad06608fe",
+  "public_inputs_sha256": "0x721732b880ebb49b013b0c9541662332a75dc583f0738429b243b69387c122d4"
+}

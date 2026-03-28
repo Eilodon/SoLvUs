@@ -1,70 +1,176 @@
-import { 
-  felt252ToU8Array32, 
-  computeNullifierHash, 
-  getThresholdForBadge 
-} from '../calldata_helper';
-import { toFieldHex } from '../shared/utils';
-import { RelayerResponse } from '../relayer/types';
+import { BadgeType, getThresholdForBadge, Hex, ProverInputs, RelayerResponse } from '../contracts';
+import {
+  bytesToHex,
+  fieldToHex32,
+  hexToBytes,
+  poseidonHash,
+  sha256Hex,
+  validateBytesLength,
+} from '../shared/utils';
+import { computeNonce } from './nonce';
 
-/**
- * ProverInputParams: Integration point for all system layers.
- */
-export interface ProverInputParams {
-  pubkeyXBytes: Uint8Array;      // 32 bytes
-  pubkeyYBytes: Uint8Array;      // 32 bytes
-  userSig: Uint8Array;           // 64 bytes [r||s], recovery stripped
-  relayerResponse: RelayerResponse; // Full response from Relayer
-  nullifierSecretHex: string;    // "0x..." from computeNullifierSecret()
-  starknetAddress: string;       // "0x..." Starknet address
-  nonce: bigint;
-  badgeType: 1 | 2 | 3;
-  tier: number;
+export const GROTH16_PUBLIC_INPUT_FIELD_COUNT = 9;
+export const GROTH16_PUBLIC_INPUT_FIELD_BYTES = 32;
+export const GROTH16_PUBLIC_INPUTS_TOTAL_BYTES =
+  GROTH16_PUBLIC_INPUT_FIELD_COUNT * GROTH16_PUBLIC_INPUT_FIELD_BYTES;
+export const GROTH16_VERIFIER_PUBLIC_INPUT_COUNT = 1;
+export const GROTH16_VERIFIER_PUBLIC_INPUT_HEADER_BYTES = 12;
+export const GROTH16_VERIFIER_PUBLIC_INPUTS_TOTAL_BYTES =
+  GROTH16_VERIFIER_PUBLIC_INPUT_HEADER_BYTES +
+  GROTH16_VERIFIER_PUBLIC_INPUT_COUNT * GROTH16_PUBLIC_INPUT_FIELD_BYTES;
+
+export interface BuildProverInputsParams {
+  user_pubkey_x: Hex;
+  user_pubkey_y: Hex;
+  user_sig: Hex;
+  relayer_response: RelayerResponse;
+  nullifier_secret: Hex;
+  solana_address: Hex;
+  badge_type: BadgeType;
 }
 
-/**
- * Builds the complete input object for Noir Prover.
- * Total 15 fields: 6 Private, 9 Public.
- * 
- * INV-01: Nullifier must bind User to Badge.
- * INV-05: Relayer signatures are compact 64-byte.
- * INV-07: Public Inputs must match 1:1 with Cairo.
- */
-export async function buildProverInputs(
-  params: ProverInputParams
-): Promise<Record<string, unknown>> {
-  // Step 1: Calculate threshold (Source of Truth is calldata_helper/Cairo)
-  const threshold = getThresholdForBadge(params.badgeType, params.tier);
-  
-  // Step 2: Compute Nullifier Hash (INV-01)
-  // CRITICAL: Must use await as Poseidon initialization is lazy/async.
-  const nullifierHashBigInt = await computeNullifierHash(
-    params.pubkeyXBytes,
-    BigInt(params.nullifierSecretHex),
-    params.badgeType
+export async function computeNullifierHash(
+  nullifierSecret: Hex,
+  badgeType: BadgeType,
+  timestamp: number,
+  nonce: Hex,
+): Promise<Hex> {
+  validateBytesLength(nullifierSecret, 32, 'nullifier_secret');
+  validateBytesLength(nonce, 32, 'nonce');
+  const hash = await poseidonHash([
+    BigInt(nullifierSecret),
+    BigInt(badgeType),
+    BigInt(timestamp),
+    BigInt(nonce),
+  ]);
+  return fieldToHex32(hash);
+}
+
+export async function buildProverInputs(params: BuildProverInputsParams): Promise<ProverInputs> {
+  validateBytesLength(params.user_pubkey_x, 32, 'pubkey_x');
+  validateBytesLength(params.user_pubkey_y, 32, 'pubkey_y');
+  validateBytesLength(params.user_sig, 64, 'user_sig');
+  validateBytesLength(params.relayer_response.signature, 64, 'relayer_sig');
+  validateBytesLength(params.relayer_response.pubkey_x, 32, 'relayer_pubkey_x');
+  validateBytesLength(params.relayer_response.pubkey_y, 32, 'relayer_pubkey_y');
+  validateBytesLength(params.solana_address, 32, 'solana_address');
+
+  const nonce = await computeNonce(params.solana_address, params.relayer_response.timestamp);
+  const nullifier_hash = await computeNullifierHash(
+    params.nullifier_secret,
+    params.badge_type,
+    params.relayer_response.timestamp,
+    nonce,
   );
-  
-  // Step 3: (Removed: relayer_pubkey is no longer a public input)
-  
-  // Step 4: Assemble 15 fields (Match Noir main.nr exactly)
+
   return {
-    // --- PRIVATE INPUTS (6) ---
-    pubkey_x:         Array.from(params.pubkeyXBytes),
-    pubkey_y:         Array.from(params.pubkeyYBytes),
-    user_sig:         Array.from(params.userSig),
-    relayer_sig_s:    params.relayerResponse.relayer_sig_s,
-    relayer_sig_r8_x: params.relayerResponse.relayer_sig_r8_x,
-    relayer_sig_r8_y: params.relayerResponse.relayer_sig_r8_y,
-    btc_data:         params.relayerResponse.btc_data,
-    nullifier_secret: params.nullifierSecretHex,
-    
-    // --- PUBLIC INPUTS (7) ---
-    starknet_address: toFieldHex(BigInt(params.starknetAddress)),
-    nonce:            toFieldHex(params.nonce),
-    badge_type:       params.badgeType,
-    _tier:            params.tier,
-    threshold:        threshold,
-    is_upper_bound:   false, // Default to false per PRD Sprint 0
-    timestamp:        params.relayerResponse.timestamp, // USE RELAYER TIMESTAMP (INV-12)
-    nullifier_hash:   toFieldHex(nullifierHashBigInt),
+    nullifier_secret: params.nullifier_secret,
+    pubkey_x: params.user_pubkey_x,
+    pubkey_y: params.user_pubkey_y,
+    user_sig: params.user_sig,
+    btc_data: params.relayer_response.btc_data,
+    relayer_sig: params.relayer_response.signature,
+    solana_address: params.solana_address,
+    nonce,
+    relayer_pubkey_x: params.relayer_response.pubkey_x,
+    relayer_pubkey_y: params.relayer_response.pubkey_y,
+    badge_type: params.badge_type,
+    threshold: getThresholdForBadge(params.badge_type),
+    is_upper_bound: false,
+    timestamp: params.relayer_response.timestamp,
+    nullifier_hash,
   };
+}
+
+export function collectPublicInputs(inputs: ProverInputs): Hex[] {
+  return [
+    inputs.solana_address,
+    inputs.nonce,
+    inputs.relayer_pubkey_x,
+    inputs.relayer_pubkey_y,
+    fieldToHex32(BigInt(inputs.badge_type)),
+    fieldToHex32(BigInt(inputs.threshold)),
+    fieldToHex32(inputs.is_upper_bound ? 1n : 0n),
+    fieldToHex32(BigInt(inputs.timestamp)),
+    inputs.nullifier_hash,
+  ];
+}
+
+export function serializePublicInputs(inputs: ProverInputs): Hex {
+  const fields = collectPublicInputs(inputs);
+  const bytes = Buffer.concat(
+    fields.map((field, index) => {
+      validateBytesLength(field, GROTH16_PUBLIC_INPUT_FIELD_BYTES, `public_inputs[${index}]`);
+      return Buffer.from(hexToBytes(field));
+    }),
+  );
+
+  if (bytes.length !== GROTH16_PUBLIC_INPUTS_TOTAL_BYTES) {
+    throw new Error(
+      `Invalid canonical public_inputs length: expected ${GROTH16_PUBLIC_INPUTS_TOTAL_BYTES} bytes, got ${bytes.length}`,
+    );
+  }
+
+  return bytesToHex(bytes);
+}
+
+export function deserializePublicInputs(serialized: Hex): Hex[] {
+  validateBytesLength(serialized, GROTH16_PUBLIC_INPUTS_TOTAL_BYTES, 'public_inputs');
+  const bytes = hexToBytes(serialized);
+  const fields: Hex[] = [];
+
+  for (let offset = 0; offset < bytes.length; offset += GROTH16_PUBLIC_INPUT_FIELD_BYTES) {
+    fields.push(bytesToHex(bytes.slice(offset, offset + GROTH16_PUBLIC_INPUT_FIELD_BYTES)));
+  }
+
+  return fields;
+}
+
+function encodeVerifierWitnessHeader(publicInputCount: number): Buffer {
+  const header = Buffer.alloc(GROTH16_VERIFIER_PUBLIC_INPUT_HEADER_BYTES);
+  header.writeUInt32BE(publicInputCount, 0);
+  header.writeUInt32BE(0, 4);
+  header.writeUInt32BE(publicInputCount, 8);
+  return header;
+}
+
+export function collectVerifierPublicInputs(inputs: ProverInputs): Hex[] {
+  return [inputs.nullifier_hash];
+}
+
+export function serializeVerifierPublicInputs(inputs: ProverInputs): Hex {
+  const fields = collectVerifierPublicInputs(inputs);
+  const bytes = Buffer.concat([
+    encodeVerifierWitnessHeader(fields.length),
+    ...fields.map((field, index) => {
+      validateBytesLength(field, GROTH16_PUBLIC_INPUT_FIELD_BYTES, `verifier_public_inputs[${index}]`);
+      return Buffer.from(hexToBytes(field));
+    }),
+  ]);
+
+  if (bytes.length !== GROTH16_VERIFIER_PUBLIC_INPUTS_TOTAL_BYTES) {
+    throw new Error(
+      `Invalid Groth16 verifier public_inputs length: expected ${GROTH16_VERIFIER_PUBLIC_INPUTS_TOTAL_BYTES} bytes, got ${bytes.length}`,
+    );
+  }
+
+  return bytesToHex(bytes);
+}
+
+export function buildDeterministicScaffoldProof(
+  inputs: ProverInputs,
+  byteLength = 320,
+): Hex {
+  const publicInputs = serializePublicInputs(inputs);
+  const publicInputBytes = Buffer.from(hexToBytes(publicInputs));
+  const chunks: Buffer[] = [];
+
+  for (let counter = 0; Buffer.concat(chunks).length < byteLength; counter += 1) {
+    const counterBytes = Buffer.alloc(2);
+    counterBytes.writeUInt16BE(counter);
+    const chunk = sha256Hex(Buffer.concat([publicInputBytes, counterBytes]));
+    chunks.push(Buffer.from(hexToBytes(chunk)));
+  }
+
+  return bytesToHex(Buffer.concat(chunks).subarray(0, byteLength));
 }

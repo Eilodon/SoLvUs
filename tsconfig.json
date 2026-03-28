@@ -7,6 +7,7 @@
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "moduleResolution": "node",
+    "skipLibCheck": true,
     "baseUrl": "./",
     "paths": {
       "@solvus/*": ["packages/*"]
@@ -14,6 +15,11 @@
     "outDir": "./dist",
     "rootDir": "./"
   },
-  "include": ["packages/**/*", "phase0/**/*"],
+  "include": [
+    "packages/core/**/*",
+    "packages/prover-server/**/*",
+    "generate_prover_toml.ts",
+    "verify_relayer.ts"
+  ],
   "exclude": ["node_modules", "dist"]
 }

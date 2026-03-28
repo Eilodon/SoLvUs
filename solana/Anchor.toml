@@ -1,0 +1,18 @@
+[workspace]
+members = [
+  "programs/solvus",
+  "programs/liquidation",
+  "programs/groth16_verifier"
+]
+
+[provider]
+cluster = "Devnet"
+wallet = "~/.config/solana/id.json"
+
+[programs.devnet]
+solvus = "Cik3PiifeUrKrWcAFsHM5R7ckQVkWAc9M9THrXVfanVR"
+liquidation = "FuNY9NZLWdegyDQHJiGjzsWcSeYG8s7nsAvaqUrk8HZt"
+
+[programs.localnet]
+solvus = "Cik3PiifeUrKrWcAFsHM5R7ckQVkWAc9M9THrXVfanVR"
+liquidation = "FuNY9NZLWdegyDQHJiGjzsWcSeYG8s7nsAvaqUrk8HZt"

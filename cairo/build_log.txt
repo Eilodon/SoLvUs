@@ -1,4 +1,0 @@
-    Updating git repository https://github.com/keep-starknet-strange/garaga
- Downloading snforge_scarb_plugin v0.53.0
- Downloading snforge_std v0.53.0
-   Compiling solvus v0.1.0 (/home/ybao/B.1/SoLvUs/cairo/Scarb.toml)

@@ -1,42 +1,36 @@
-import { toHex64, stripRecoveryByte } from '../shared/utils';
+import { createHash } from 'crypto';
+import { Hex } from '../contracts';
+import {
+  bytesToHex,
+  fieldToHex32,
+  normalizeHex,
+  stripRecoveryByte,
+  validateBytesLength,
+} from '../shared/utils';
 
-/**
- * Placeholder for Xverse signMessage.
- * In a real implementation, this would come from 'sats-connect' or a similar SDK.
- */
-async function signMessage(options: { message: string; address: string }): Promise<{ signature: string }> {
-  // This is a placeholder since the actual SDK is not installed in this environment
-  throw new Error('Xverse SDK (signMessage) not implemented in this environment.');
+const BITCOIN_SIGNED_MESSAGE_PREFIX = Uint8Array.from([
+  0x18, 0x42, 0x69, 0x74, 0x63, 0x6f, 0x69, 0x6e, 0x20, 0x53, 0x69, 0x67, 0x6e, 0x65, 0x64, 0x20,
+  0x4d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65, 0x3a, 0x0a, 0x80,
+]);
+
+export function buildMintMessage(solanaAddress: Hex, nonce: Hex | bigint): string {
+  validateBytesLength(solanaAddress, 32, 'solana_address');
+  const nonceHex = typeof nonce === 'bigint' ? fieldToHex32(nonce) : normalizeHex(nonce);
+  validateBytesLength(nonceHex, 32, 'nonce');
+  return solanaAddress.slice(2) + nonceHex.slice(2);
 }
 
-/**
- * Builds the user signature for Proof of Ownership.
- * 
- * MESSAGE FORMAT (INV-08):
- * 128 ASCII hex chars = toHex64(starknetAddress) + toHex64(nonce)
- * - 64 chars: starknetAddress (lowercase hex, padded, NO 0x)
- * - 64 chars: nonce (lowercase hex, padded, NO 0x)
- * 
- * RETURN:
- * 64-byte Uint8Array [r||s] (stripped recovery byte)
- */
-export async function buildUserSig(
-  starknetAddress: string | bigint,
-  nonce: bigint,
-  btcAddress: string
-): Promise<Uint8Array> {
-  // Step 1: Message reconstruction (Match Noir bytes_to_hex64)
-  const addrBN = typeof starknetAddress === 'string' ? BigInt(starknetAddress) : starknetAddress;
-  const message = toHex64(addrBN) + toHex64(nonce);
+export function buildMintMessagePreimage(solanaAddress: Hex, nonce: Hex | bigint): Uint8Array {
+  const message = Buffer.from(buildMintMessage(solanaAddress, nonce), 'utf8');
+  return new Uint8Array(Buffer.concat([Buffer.from(BITCOIN_SIGNED_MESSAGE_PREFIX), message]));
+}
 
-  if (message.length !== 128) {
-    throw new Error(`Invalid message length: ${message.length}. Expected 128.`);
-  }
+export function hashMintMessage(solanaAddress: Hex, nonce: Hex | bigint): Uint8Array {
+  const preimage = buildMintMessagePreimage(solanaAddress, nonce);
+  const firstPass = createHash('sha256').update(preimage).digest();
+  return new Uint8Array(createHash('sha256').update(firstPass).digest());
+}
 
-  // Step 2: Sign message via Xverse
-  const { signature: userSigBase64 } = await signMessage({ message, address: btcAddress });
-
-  // Step 3: Strip recovery byte (INV-03)
-  // Noir expect 64 bytes [r||s]
-  return stripRecoveryByte(userSigBase64);
+export function compactSignatureFromBase64(signatureBase64: string): Hex {
+  return bytesToHex(stripRecoveryByte(signatureBase64));
 }

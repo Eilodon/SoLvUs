@@ -1,0 +1,7 @@
+[workspace]
+members = [
+  "programs/solvus",
+  "programs/liquidation",
+  "programs/groth16_verifier"
+]
+resolver = "2"

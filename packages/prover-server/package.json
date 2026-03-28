@@ -3,6 +3,6 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "start": "ts-node prover_server.ts"
+    "start": "TS_NODE_FILES=true ts-node prover_server.ts"
   }
 }

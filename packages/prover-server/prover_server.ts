@@ -1,112 +1,204 @@
-import express from 'express';
-import dotenv from 'dotenv';
 import bodyParser from 'body-parser';
 import cors from 'cors';
-import { exec } from 'child_process';
-import { writeFileSync, readFileSync, unlinkSync, existsSync } from 'fs';
-import { randomUUID } from 'crypto';
+import dotenv from 'dotenv';
+import express from 'express';
 import path from 'path';
+import { PublicKey } from '@solana/web3.js';
 
-// Load .env from project root
-dotenv.config({ path: path.join(__dirname, '../../.env') });
+const workspaceRoot = path.join(__dirname, '../..');
+const solvusEnv = process.env.SOLVUS_ENV || 'devnet';
+dotenv.config({
+  path: [path.join(workspaceRoot, `config/${solvusEnv}.env`), path.join(workspaceRoot, '.env')],
+});
 
-import { fetchRelayerData, u64ToBigEndian } from '../core/index';
+import {
+  bytesToHex,
+  createDynamicDevMintFixture,
+  loadConfig,
+  ProofResponse,
+  ProverInputs,
+  RELAYER_SIG_EXPIRY,
+  stableJsonHash,
+  validateBytesLength,
+} from '../core';
+import { getDevnetMintContext, mintOnDevnet, prepareMintOnDevnet } from './devnet_mint';
+import {
+  generateDevnetMintProofBundle,
+  generateGroth16ProofBundle,
+  getDevnetMintProofMode,
+  getGroth16AdapterMode,
+} from './groth16_adapter';
 
 const app = express();
+const config = loadConfig();
 const PORT = process.env.PROVER_PORT || 3001;
-const CIRCUITS_PATH = path.join(__dirname, '../../circuits');
+const cache = new Map<string, { expiresAt: number; response: ProofResponse }>();
 
 app.use(cors());
-app.use(bodyParser.json());
+app.use(bodyParser.json({ limit: '1mb' }));
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: Math.floor(Date.now() / 1000) });
+  res.json({
+    status: 'ok',
+    timestamp: Math.floor(Date.now() / 1000),
+    prover_backend: config.proverBackend,
+    prover_adapter_mode: getGroth16AdapterMode(),
+    devnet_mint_proof_mode: getDevnetMintProofMode(),
+    cache_entries: cache.size,
+    solvus_program_id: config.solvusProgramId || null,
+    groth16_verifier_program_id: config.groth16VerifierProgramId || null,
+    oracle_price_feed_id: config.oraclePriceFeedId || null,
+    devnet_mint: getDevnetMintContext(config),
+  });
 });
 
 app.post('/prove', async (req, res) => {
   req.setTimeout(180000);
-  const uuid = randomUUID();
-  const proverTomlPath = path.join(CIRCUITS_PATH, `${uuid}.toml`);
-  const witnessPath = path.join(CIRCUITS_PATH, 'target', `${uuid}.gz`);
 
   try {
-    const { inputs } = req.body;
-    if (!inputs) return res.status(400).json({ error: 'Missing inputs' });
-    writeFileSync(proverTomlPath, jsonToProverToml(inputs));
-    const command = `nargo execute --prover-name ${uuid} ${uuid}`;
-    await new Promise((resolve, reject) => {
-      exec(command, { cwd: CIRCUITS_PATH, timeout: 60000 }, (error, stdout, stderr) => {
-        if (error) reject(new Error(stderr || error.message));
-        else resolve(stdout);
-      });
-    });
-    const { Barretenberg, UltraHonkBackend, BackendType } = await (eval(`import('@aztec/bb.js')`) as Promise<any>);
-    const circuitArtifact = JSON.parse(readFileSync(path.join(CIRCUITS_PATH, 'target/solvus.json'), 'utf8'));
-    const compressedWitness = readFileSync(witnessPath);
-    const api = await Barretenberg.new({ backend: BackendType.Wasm });
-    const backend = new UltraHonkBackend(circuitArtifact.bytecode, api);
-    const proofData = await backend.generateProof(compressedWitness);
-    res.json({
-      success: true,
-      proof: '0x' + Buffer.from(proofData.proof).toString('hex'),
-      publicInputs: proofData.publicInputs.map((pi: Uint8Array) => '0x' + Buffer.from(pi).toString('hex')),
-      id: uuid
-    });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
-  } finally {
-    if (existsSync(proverTomlPath)) unlinkSync(proverTomlPath);
-    if (existsSync(witnessPath)) unlinkSync(witnessPath);
-  }
-});
-
-/**
- * POST /sign
- * Fully self-contained relayer signing logic.
- */
-app.post('/sign', async (req, res) => {
-  try {
-    const { pubkeyX, btcAddress, badgeType } = req.body;
-    if (!pubkeyX || !btcAddress || !badgeType) {
-      return res.status(400).json({ error: 'Missing fields' });
+    const proverInputs = req.body?.prover_inputs as ProverInputs | undefined;
+    if (!proverInputs) {
+      return res.status(400).json({ error: 'Missing prover_inputs' });
     }
 
-    const privateKey = process.env.RELAYER_EDDSA_PRIVATE_KEY;
-    if (!privateKey) throw new Error('RELAYER_EDDSA_PRIVATE_KEY is missing in env');
+    assertValidProverInputs(proverInputs);
 
-    console.log(`[Relayer] Signing data for BTC Address: ${btcAddress}, Badge Type: ${badgeType}`);
+    const idempotencyKey =
+      (req.header('X-Idempotency-Key') || stableJsonHash(proverInputs)).toLowerCase();
+    const cached = cache.get(idempotencyKey);
+    const now = Math.floor(Date.now() / 1000);
 
-    const relayerResponse = await fetchRelayerData(
-      Buffer.from(pubkeyX.replace('0x', ''), 'hex'),
-      btcAddress,
-      Number(badgeType),
-      privateKey
-    );
+    if (cached && cached.expiresAt > now) {
+      return res.json({
+        ...cached.response,
+        cached: true,
+        retry_count: 1,
+      });
+    }
 
-    res.json({
-      success: true,
-      btc_data: relayerResponse.btc_data,
-      timestamp: relayerResponse.timestamp,
-      relayer_sig_s:    relayerResponse.relayer_sig_s,
-      relayer_sig_r8_x: relayerResponse.relayer_sig_r8_x,
-      relayer_sig_r8_y: relayerResponse.relayer_sig_r8_y,
+    const startedAt = Date.now();
+    const bundle = await generateGroth16ProofBundle(proverInputs);
+    const response: ProofResponse = {
+      proof: bundle.proof,
+      public_inputs: bundle.public_inputs,
+      proving_time: Date.now() - startedAt,
+      cached: false,
+      retry_count: 0,
+    };
+
+    cache.set(idempotencyKey, {
+      expiresAt: now + RELAYER_SIG_EXPIRY,
+      response,
     });
+
+    return res.json(response);
   } catch (error: any) {
-    console.error('[Relayer] Signing failed:', error.message);
-    res.status(500).json({ success: false, error: error.message });
+    const message = error instanceof Error ? error.message : 'Unknown proving failure';
+    return res.status(500).json({
+      code: 'ERROR_PROOF_SERVER_TIMEOUT',
+      error: 'Proof generation failed',
+      message,
+    });
   }
 });
 
-function jsonToProverToml(inputs: Record<string, any>): string {
-  let toml = '';
-  for (const [key, value] of Object.entries(inputs)) {
-    if (Array.isArray(value)) toml += `${key} = [${value.map(v => typeof v === 'string' ? `"${v}"` : v).join(', ')}]\n`;
-    else if (typeof value === 'boolean' || typeof value === 'number') toml += `${key} = ${value}\n`;
-    else toml += `${key} = "${value}"\n`;
+app.post('/mint-devnet', async (req, res) => {
+  req.setTimeout(180000);
+
+  try {
+    const proverInputs = req.body?.prover_inputs as ProverInputs | undefined;
+    const zkusdAmount = Number(req.body?.zkusd_amount ?? 1_000_000);
+    if (!proverInputs) {
+      return res.status(400).json({ error: 'Missing prover_inputs' });
+    }
+    if (!Number.isInteger(zkusdAmount) || zkusdAmount <= 0) {
+      return res.status(400).json({ error: 'zkusd_amount must be a positive integer' });
+    }
+
+    assertValidProverInputs(proverInputs);
+    const bundle = await generateDevnetMintProofBundle(proverInputs);
+    const mintResult = await mintOnDevnet(config, {
+      nullifier_hash: proverInputs.nullifier_hash,
+      zkusd_amount: zkusdAmount,
+      proof: bundle.proof,
+      public_inputs: bundle.public_inputs,
+    });
+
+    return res.json({
+      success: true,
+      zkusd_amount: zkusdAmount,
+      ...mintResult,
+    });
+  } catch (error: any) {
+    const message = error instanceof Error ? error.message : 'Unknown devnet mint failure';
+    return res.status(500).json({
+      code: 'ERROR_DEVNET_MINT_FAILED',
+      error: 'Devnet mint failed',
+      message,
+    });
   }
-  return toml;
+});
+
+app.post('/prepare-devnet-mint', async (req, res) => {
+  req.setTimeout(180000);
+
+  try {
+    const ownerPubkey = req.body?.owner_pubkey;
+    const zkusdAmount = Number(req.body?.zkusd_amount ?? 1_000_000);
+    if (typeof ownerPubkey !== 'string' || ownerPubkey.length === 0) {
+      return res.status(400).json({ error: 'Missing owner_pubkey' });
+    }
+    if (!Number.isInteger(zkusdAmount) || zkusdAmount <= 0) {
+      return res.status(400).json({ error: 'zkusd_amount must be a positive integer' });
+    }
+
+    const owner = new PublicKey(ownerPubkey);
+    const fixture = await createDynamicDevMintFixture({
+      solana_address: bytesToHex(owner.toBytes()),
+    });
+    assertValidProverInputs(fixture.prover_inputs);
+
+    const bundle = await generateDevnetMintProofBundle(fixture.prover_inputs);
+    const mintResult = await prepareMintOnDevnet(config, owner.toBase58(), {
+      nullifier_hash: fixture.prover_inputs.nullifier_hash,
+      zkusd_amount: zkusdAmount,
+      proof: bundle.proof,
+      public_inputs: bundle.public_inputs,
+    });
+
+    return res.json({
+      success: true,
+      zkusd_amount: zkusdAmount,
+      prover_inputs: fixture.prover_inputs,
+      ...mintResult,
+    });
+  } catch (error: any) {
+    const message = error instanceof Error ? error.message : 'Unknown prepare devnet mint failure';
+    return res.status(500).json({
+      code: 'ERROR_PREPARE_DEVNET_MINT_FAILED',
+      error: 'Prepare devnet mint failed',
+      message,
+    });
+  }
+});
+
+function assertValidProverInputs(inputs: ProverInputs): void {
+  validateBytesLength(inputs.nullifier_secret, 32, 'nullifier_secret');
+  validateBytesLength(inputs.pubkey_x, 32, 'pubkey_x');
+  validateBytesLength(inputs.pubkey_y, 32, 'pubkey_y');
+  validateBytesLength(inputs.user_sig, 64, 'user_sig');
+  validateBytesLength(inputs.relayer_sig, 64, 'relayer_sig');
+  validateBytesLength(inputs.solana_address, 32, 'solana_address');
+  validateBytesLength(inputs.nonce, 32, 'nonce');
+  validateBytesLength(inputs.relayer_pubkey_x, 32, 'relayer_pubkey_x');
+  validateBytesLength(inputs.relayer_pubkey_y, 32, 'relayer_pubkey_y');
+  validateBytesLength(inputs.nullifier_hash, 32, 'nullifier_hash');
+
+  if (inputs.btc_data <= 0) {
+    throw new Error('btc_data must be greater than zero');
+  }
 }
 
 app.listen(PORT, () => {
-  console.log(`🚀 Solvus Prover Server running on port ${PORT}`);
+  console.log(`Solvus Prover Server running on port ${PORT} with backend=${config.proverBackend}`);
 });
