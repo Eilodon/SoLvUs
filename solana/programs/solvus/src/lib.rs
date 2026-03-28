@@ -252,10 +252,36 @@ pub mod solvus {
         )?;
 
         let now = Clock::get()?.unix_timestamp;
-        vault.zkusd_minted = vault
+        let remaining_zkusd = vault
             .zkusd_minted
             .checked_sub(zkusd_amount)
             .ok_or(SolvusError::MathOverflow)?;
+
+        // If burning all zkusd, skip collateral check
+        if remaining_zkusd > 0 {
+            // Get BTC price for collateral validation
+            let btc_price_data = ctx.accounts.oracle_price_feed.try_borrow_data()?;
+            let btc_price = u64::from_le_bytes(
+                btc_price_data[0..8]
+                    .try_into()
+                    .map_err(|_| error!(SolvusError::OraclePriceFeedNotConfigured))?,
+            );
+            require!(btc_price > 0, SolvusError::InvalidOraclePrice);
+
+            // Check remaining collateral >= 150% of remaining zkusd
+            let required_collateral = remaining_zkusd
+                .checked_mul(15000)
+                .ok_or(SolvusError::MathOverflow)?
+                .checked_div(btc_price)
+                .ok_or(SolvusError::MathOverflow)?;
+
+            require!(
+                vault.collateral_btc >= required_collateral,
+                SolvusError::InsufficientCollateral
+            );
+        }
+
+        vault.zkusd_minted = remaining_zkusd;
         vault.last_update = now;
         vault.status = VaultStatus::PendingBtcRelease as u8;
         vault.dlc_close_deadline = Some(now + DLC_CLOSE_TIMEOUT);
@@ -583,6 +609,11 @@ pub struct BurnZkUsd<'info> {
     pub zkusd_mint: Account<'info, Mint>,
     #[account(mut)]
     pub zkusd_token_account: Account<'info, TokenAccount>,
+    #[account(seeds = [PROTOCOL_CONFIG_SEED], bump)]
+    pub protocol_config: Account<'info, ProtocolConfig>,
+    /// CHECK: Validated manually against protocol_config
+    #[account(address = protocol_config.oracle_price_feed_id)]
+    pub oracle_price_feed: AccountInfo<'info>,
     pub token_program: Program<'info, Token>,
 }
 
