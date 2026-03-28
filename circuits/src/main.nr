@@ -43,6 +43,7 @@ fn main(
     threshold: u64,
     is_upper_bound: bool,
     dlc_contract_id: pub Field,
+    nullifier_secret: Field,
     nullifier_hash: pub Field,
 
     pubkey_x: [u8; 32],
@@ -98,7 +99,7 @@ fn main(
     let expected_nullifier_hash = legacy_poseidon::bn254::hash_4([
         dlc_contract_id,
         badge_type as Field,
-        0,
+        nullifier_secret,
         0,
     ]);
     assert(expected_nullifier_hash == nullifier_hash);
