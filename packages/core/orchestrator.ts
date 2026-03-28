@@ -14,6 +14,7 @@ export interface PrepareMintRequestParams {
   userSignature: Hex;
   zkusdAmount: number;
   dlcContractId: Hex;
+  nullifierSecret: Hex;
   l1RefundTimelock: number;
   indexer: BitcoinIndexer;
   signer: RelayerSigner;
@@ -42,6 +43,7 @@ export async function prepareMintRequest(params: PrepareMintRequestParams): Prom
     relayer_response,
     solana_address: params.solanaAddress,
     badge_type: params.badgeType,
+    nullifier_secret: params.nullifierSecret,
   });
 
   const public_inputs = serializeVerifierPublicInputs(prover_inputs);

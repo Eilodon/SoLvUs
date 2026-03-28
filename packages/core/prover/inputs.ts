@@ -25,18 +25,22 @@ export interface BuildProverInputsParams {
   relayer_response: RelayerResponse;
   solana_address: Hex;
   badge_type: BadgeType;
+  nullifier_secret: Hex;
 }
 
 export async function computeNullifierHash(
   dlcContractId: Hex,
   badgeType: BadgeType,
+  nullifierSecret: Hex,
 ): Promise<Hex> {
   validateBytesLength(dlcContractId, 32, 'dlc_contract_id');
+  validateBytesLength(nullifierSecret, 32, 'nullifier_secret');
   const dlcBigInt = BigInt('0x' + dlcContractId);
+  const secretBigInt = BigInt('0x' + nullifierSecret);
   const hash = await poseidonHash([
     dlcBigInt,
     BigInt(badgeType),
-    0n,
+    secretBigInt,
     0n,
   ]);
   return fieldToHex32(hash);
@@ -54,10 +58,12 @@ export async function buildProverInputs(params: BuildProverInputsParams): Promis
   const nullifier_hash = await computeNullifierHash(
     params.relayer_response.dlc_contract_id,
     params.badge_type,
+    params.nullifier_secret,
   );
 
   return {
     dlc_contract_id: params.relayer_response.dlc_contract_id,
+    nullifier_secret: params.nullifier_secret,
     pubkey_x: params.user_pubkey_x,
     pubkey_y: params.user_pubkey_y,
     user_sig: params.user_sig,

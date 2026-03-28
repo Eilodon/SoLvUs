@@ -14,6 +14,8 @@ export const DEV_SOLANA_ADDRESS =
 export const DEV_BTC_ADDRESS = 'bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh';
 export const DEV_DLC_CONTRACT_ID =
   '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex;
+export const DEV_NULLIFIER_SECRET =
+  '0x3333333333333333333333333333333333333333333333333333333333333333' as Hex;
 export const DEV_BADGE_TYPE = BadgeType.Whale;
 
 export interface DevMintFixture {
@@ -35,6 +37,7 @@ export interface DynamicDevMintFixtureParams {
   btc_address?: string;
   badge_type?: BadgeType;
   dlc_contract_id?: Hex;
+  nullifier_secret?: Hex;
   user_private_key?: Hex;
   relayer_private_key?: Hex;
 }
@@ -46,6 +49,7 @@ interface BuildDevMintFixtureParams {
   badge_type: BadgeType;
   solana_address: Hex;
   dlc_contract_id: Hex;
+  nullifier_secret: Hex;
 }
 
 async function buildDevMintFixture(params: BuildDevMintFixtureParams): Promise<DevMintFixture> {
@@ -77,6 +81,7 @@ async function buildDevMintFixture(params: BuildDevMintFixtureParams): Promise<D
     relayer_response,
     solana_address: params.solana_address,
     badge_type: params.badge_type,
+    nullifier_secret: params.nullifier_secret,
   });
 
   return {
@@ -102,6 +107,7 @@ export async function createDevMintFixture(): Promise<DevMintFixture> {
     badge_type: DEV_BADGE_TYPE,
     solana_address: DEV_SOLANA_ADDRESS,
     dlc_contract_id: DEV_DLC_CONTRACT_ID,
+    nullifier_secret: DEV_NULLIFIER_SECRET,
   });
 }
 
@@ -110,6 +116,7 @@ export async function createDynamicDevMintFixture(
 ): Promise<DevMintFixture> {
   const user_private_key =
     params.user_private_key ?? bytesToHex(secp256k1.utils.randomPrivateKey());
+  const nullifier_secret = params.nullifier_secret ?? DEV_NULLIFIER_SECRET;
 
   return buildDevMintFixture({
     user_private_key,
@@ -118,5 +125,6 @@ export async function createDynamicDevMintFixture(
     badge_type: params.badge_type ?? DEV_BADGE_TYPE,
     solana_address: params.solana_address,
     dlc_contract_id: params.dlc_contract_id ?? DEV_DLC_CONTRACT_ID,
+    nullifier_secret,
   });
 }
