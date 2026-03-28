@@ -31,6 +31,15 @@ const oraclePriceFeedId = new PublicKey(
   process.env.ORACLE_PRICE_FEED_ID || "H6ARHf6YXhGYeQfUzQNGk6rDNnLBQKrenN712K4AQJEG",
 );
 
+const relayerPubkeyX = Buffer.from(
+  (process.env.RELAYER_SECP256K1_PUBLIC_KEY_X || "00".repeat(32)).replace(/^0x/, ""),
+  "hex"
+);
+const relayerPubkeyY = Buffer.from(
+  (process.env.RELAYER_SECP256K1_PUBLIC_KEY_Y || "00".repeat(32)).replace(/^0x/, ""),
+  "hex"
+);
+
 if (!existsSync(walletPath)) {
   throw new Error(`missing wallet keypair: ${walletPath}`);
 }
@@ -68,6 +77,8 @@ async function main() {
   const data = Buffer.concat([
     discriminator(instructionName),
     encodePubkeys(verifierProgramId, oraclePriceFeedId),
+    relayerPubkeyX,
+    relayerPubkeyY,
   ]);
 
   const instruction = new TransactionInstruction({

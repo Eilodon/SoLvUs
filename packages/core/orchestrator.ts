@@ -29,6 +29,7 @@ export async function prepareMintRequest(params: PrepareMintRequestParams): Prom
     btcAddress: params.btcAddress,
     badgeType: params.badgeType,
     userPubkeyX: params.userPubkeyX,
+    solanaAddress: params.solanaAddress,
     indexer: params.indexer,
     signer: params.signer,
   });

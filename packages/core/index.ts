@@ -4,6 +4,7 @@ export * from './identity/nullifier_secret';
 export * from './client/user_sig';
 export * from './relayer';
 export * from './relayer/types';
+export * from './relayer/state';
 export * from './orchestrator';
 export * from './config';
 export * from './prover/inputs';

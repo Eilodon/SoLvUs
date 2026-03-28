@@ -13,7 +13,7 @@ const VAULT_SEED: &[u8] = b"vault";
 const DLC_CLOSE_TIMEOUT: i64 = 3600;
 const GRACE_PERIOD_DURATION: i64 = 3600;
 const SPL_TOKEN_PROGRAM_ID: Pubkey = pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
-const GROTH16_PUBLIC_INPUT_FIELD_COUNT: usize = 1;
+const GROTH16_PUBLIC_INPUT_FIELD_COUNT: usize = 66;
 const GROTH16_PUBLIC_INPUT_HEADER_BYTES: usize = 12;
 const GROTH16_PUBLIC_INPUT_BYTES: usize =
     GROTH16_PUBLIC_INPUT_HEADER_BYTES + GROTH16_PUBLIC_INPUT_FIELD_COUNT * 32;
@@ -26,6 +26,9 @@ pub mod solvus {
         ctx: Context<InitializeProtocolConfig>,
         groth16_verifier_program_id: Pubkey,
         oracle_price_feed_id: Pubkey,
+        liquidation_program_id: Pubkey,
+        authorized_relayer_pubkey_x: [u8; 32],
+        authorized_relayer_pubkey_y: [u8; 32],
     ) -> Result<()> {
         require!(
             groth16_verifier_program_id != Pubkey::default(),
@@ -41,13 +44,19 @@ pub mod solvus {
         protocol_config.admin = ctx.accounts.admin.key();
         protocol_config.groth16_verifier_program_id = groth16_verifier_program_id;
         protocol_config.oracle_price_feed_id = oracle_price_feed_id;
+        protocol_config.liquidation_program_id = liquidation_program_id;
+        protocol_config.authorized_relayer_pubkey_x = authorized_relayer_pubkey_x;
+        protocol_config.authorized_relayer_pubkey_y = authorized_relayer_pubkey_y;
         protocol_config.updated_at = now;
 
         emit!(ProtocolConfigUpdatedEvent {
             admin: ctx.accounts.admin.key(),
             groth16_verifier_program_id,
             oracle_price_feed_id,
+            liquidation_program_id,
             updated_at: now,
+            authorized_relayer_pubkey_x,
+            authorized_relayer_pubkey_y,
         });
 
         Ok(())
@@ -57,6 +66,9 @@ pub mod solvus {
         ctx: Context<UpdateProtocolConfig>,
         groth16_verifier_program_id: Pubkey,
         oracle_price_feed_id: Pubkey,
+        liquidation_program_id: Pubkey,
+        authorized_relayer_pubkey_x: [u8; 32],
+        authorized_relayer_pubkey_y: [u8; 32],
     ) -> Result<()> {
         require_keys_eq!(
             ctx.accounts.protocol_config.admin,
@@ -76,13 +88,19 @@ pub mod solvus {
         let protocol_config = &mut ctx.accounts.protocol_config;
         protocol_config.groth16_verifier_program_id = groth16_verifier_program_id;
         protocol_config.oracle_price_feed_id = oracle_price_feed_id;
+        protocol_config.liquidation_program_id = liquidation_program_id;
+        protocol_config.authorized_relayer_pubkey_x = authorized_relayer_pubkey_x;
+        protocol_config.authorized_relayer_pubkey_y = authorized_relayer_pubkey_y;
         protocol_config.updated_at = now;
 
         emit!(ProtocolConfigUpdatedEvent {
             admin: ctx.accounts.admin.key(),
             groth16_verifier_program_id,
             oracle_price_feed_id,
+            liquidation_program_id,
             updated_at: now,
+            authorized_relayer_pubkey_x,
+            authorized_relayer_pubkey_y,
         });
 
         Ok(())
@@ -97,7 +115,13 @@ pub mod solvus {
     ) -> Result<()> {
         require!(zkusd_amount > 0, SolvusError::InvalidAmount);
         require!(!proof.is_empty(), SolvusError::InvalidProof);
-        assert_canonical_public_inputs(&nullifier_hash, &public_inputs)?;
+        let btc_data = assert_canonical_public_inputs(
+            &nullifier_hash,
+            &public_inputs,
+            &ctx.accounts.protocol_config.authorized_relayer_pubkey_x,
+            &ctx.accounts.protocol_config.authorized_relayer_pubkey_y,
+            zkusd_amount,
+        )?;
         require_keys_eq!(
             ctx.accounts.token_program.key(),
             SPL_TOKEN_PROGRAM_ID,
@@ -119,9 +143,14 @@ pub mod solvus {
         let vault = &mut ctx.accounts.vault;
         if vault.owner == Pubkey::default() {
             vault.owner = ctx.accounts.owner.key();
-            vault.collateral_btc = 0;
+            vault.collateral_btc = btc_data;
             vault.zkusd_minted = 0;
             vault.status = VaultStatus::Initialized as u8;
+        } else {
+            vault.collateral_btc = vault
+                .collateral_btc
+                .checked_add(btc_data)
+                .ok_or(SolvusError::MathOverflow)?;
         }
 
         vault.zkusd_minted = vault
@@ -176,8 +205,8 @@ pub mod solvus {
         let vault = &mut ctx.accounts.vault;
         require_keys_eq!(vault.owner, ctx.accounts.owner.key(), SolvusError::Unauthorized);
         require!(
-            vault.status != VaultStatus::GracePeriod as u8,
-            SolvusError::BurnInGracePeriod
+            vault.status == VaultStatus::Healthy as u8 || vault.status == VaultStatus::AtRisk as u8,
+            SolvusError::BurnNotAllowedInCurrentState
         );
         require!(vault.zkusd_minted >= zkusd_amount, SolvusError::InsufficientBalance);
 
@@ -214,6 +243,7 @@ pub mod solvus {
     pub fn claim_dlc_timeout(ctx: Context<ClaimDlcTimeout>) -> Result<()> {
         let now = Clock::get()?.unix_timestamp;
         let vault = &mut ctx.accounts.vault;
+        require_keys_eq!(vault.owner, ctx.accounts.caller.key(), SolvusError::Unauthorized);
 
         require!(
             vault.status == VaultStatus::PendingBtcRelease as u8,
@@ -240,6 +270,7 @@ pub mod solvus {
     pub fn close_dlc(ctx: Context<CloseDlc>) -> Result<()> {
         let now = Clock::get()?.unix_timestamp;
         let vault = &mut ctx.accounts.vault;
+        require_keys_eq!(vault.owner, ctx.accounts.authority.key(), SolvusError::Unauthorized);
 
         require!(
             vault.status == VaultStatus::PendingBtcRelease as u8
@@ -261,6 +292,11 @@ pub mod solvus {
     }
 
     pub fn enter_grace_period(ctx: Context<EnterGracePeriod>) -> Result<()> {
+        require_keys_eq!(
+            ctx.accounts.protocol_config.admin,
+            ctx.accounts.authority.key(),
+            SolvusError::Unauthorized
+        );
         let now = Clock::get()?.unix_timestamp;
         let vault = &mut ctx.accounts.vault;
         vault.status = VaultStatus::GracePeriod as u8;
@@ -268,13 +304,77 @@ pub mod solvus {
         vault.last_update = now;
         Ok(())
     }
+
+    pub fn liquidate_vault_cpi(
+        ctx: Context<LiquidateVaultCpi>,
+        collateral_seized: u64,
+        liquidator_reward: u64,
+    ) -> Result<()> {
+        let vault = &mut ctx.accounts.vault;
+
+        require!(
+            vault.status == VaultStatus::AtRisk as u8
+                || vault.status == VaultStatus::Unhealthy as u8
+                || vault.status == VaultStatus::DlcTimeoutPending as u8,
+            SolvusError::VaultNotLiquidatable
+        );
+
+        require_keys_eq!(
+            ctx.accounts.liquidation_program.key(),
+            ctx.accounts.protocol_config.liquidation_program_id,
+            SolvusError::UnauthorizedLiquidator
+        );
+
+        require!(
+            collateral_seized <= vault.collateral_btc,
+            SolvusError::InvalidLiquidationAmount
+        );
+
+        let now = Clock::get()?.unix_timestamp;
+        vault.collateral_btc = vault
+            .collateral_btc
+            .checked_sub(collateral_seized)
+            .ok_or(SolvusError::MathOverflow)?;
+
+        vault.zkusd_minted = 0;
+        vault.status = VaultStatus::Liquidated as u8;
+        vault.last_update = now;
+
+        emit!(VaultLiquidatedByProtocolEvent {
+            vault_owner: vault.owner,
+            liquidator: ctx.accounts.liquidator.key(),
+            collateral_seized,
+            liquidator_reward,
+            timestamp: now,
+        });
+
+        Ok(())
+    }
 }
 
-fn assert_canonical_public_inputs(nullifier_hash: &[u8; 32], public_inputs: &[u8]) -> Result<()> {
+fn assert_canonical_public_inputs(
+    nullifier_hash: &[u8; 32],
+    public_inputs: &[u8],
+    authorized_relayer_x: &[u8; 32],
+    authorized_relayer_y: &[u8; 32],
+    zkusd_amount: u64,
+) -> Result<u64> {
     require!(
         public_inputs.len() == GROTH16_PUBLIC_INPUT_BYTES,
         SolvusError::InvalidPublicInputs
     );
+
+    let mut extracted_x = [0u8; 32];
+    let mut extracted_y = [0u8; 32];
+    for i in 0..32 {
+        extracted_x[i] = public_inputs[GROTH16_PUBLIC_INPUT_HEADER_BYTES + i * 32 + 31];
+        extracted_y[i] = public_inputs[GROTH16_PUBLIC_INPUT_HEADER_BYTES + 1024 + i * 32 + 31];
+    }
+    require!(
+        &extracted_x == authorized_relayer_x && &extracted_y == authorized_relayer_y,
+        SolvusError::UnauthorizedRelayer
+    );
+
     let public_input_count = u32::from_be_bytes(
         public_inputs[0..4]
             .try_into()
@@ -296,11 +396,32 @@ fn assert_canonical_public_inputs(nullifier_hash: &[u8; 32], public_inputs: &[u8
     );
     require!(private_input_count == 0, SolvusError::InvalidPublicInputs);
     require!(entry_count == public_input_count, SolvusError::InvalidPublicInputs);
+
+    let nullifier_start = GROTH16_PUBLIC_INPUT_HEADER_BYTES + 64 * 32;
+    let nullifier_end = nullifier_start + 32;
     require!(
-        &public_inputs[(GROTH16_PUBLIC_INPUT_BYTES - 32)..] == nullifier_hash.as_ref(),
+        &public_inputs[nullifier_start..nullifier_end] == nullifier_hash.as_ref(),
         SolvusError::PublicInputsNullifierMismatch
     );
-    Ok(())
+
+    let mut btc_data_bytes = [0u8; 8];
+    btc_data_bytes.copy_from_slice(
+        &public_inputs[(GROTH16_PUBLIC_INPUT_BYTES - 8)..GROTH16_PUBLIC_INPUT_BYTES],
+    );
+    let btc_data = u64::from_be_bytes(btc_data_bytes);
+
+    let required_collateral = zkusd_amount
+        .checked_mul(15000)
+        .ok_or(SolvusError::MathOverflow)?
+        .checked_div(10000)
+        .ok_or(SolvusError::MathOverflow)?;
+
+    require!(
+        btc_data >= required_collateral,
+        SolvusError::InsufficientCollateral
+    );
+
+    Ok(btc_data)
 }
 
 fn verify_groth16_proof(
@@ -313,8 +434,15 @@ fn verify_groth16_proof(
         SolvusError::VerifierProgramNotConfigured
     );
 
-    let mut instruction_data = Vec::with_capacity(proof.len() + public_inputs.len());
+    // Build length-prefixed payload: [u32LE proof_len][proof][u32LE pi_len][public_inputs]
+    let proof_len = (proof.len() as u32).to_le_bytes();
+    let pi_len = (public_inputs.len() as u32).to_le_bytes();
+
+    let mut instruction_data =
+        Vec::with_capacity(4 + proof.len() + 4 + public_inputs.len());
+    instruction_data.extend_from_slice(&proof_len);
     instruction_data.extend_from_slice(&proof);
+    instruction_data.extend_from_slice(&pi_len);
     instruction_data.extend_from_slice(&public_inputs);
 
     let instruction = Instruction {
@@ -323,7 +451,8 @@ fn verify_groth16_proof(
         data: instruction_data,
     };
 
-    invoke(&instruction, &[verifier_program.clone()]).map_err(|_| error!(SolvusError::InvalidProof))
+    invoke(&instruction, &[verifier_program.clone()])
+        .map_err(|_| error!(SolvusError::InvalidProof))
 }
 
 #[derive(Accounts)]
@@ -403,7 +532,7 @@ pub struct BurnZkUsd<'info> {
 pub struct ClaimDlcTimeout<'info> {
     #[account(mut)]
     pub caller: Signer<'info>,
-    #[account(mut)]
+    #[account(mut, seeds = [VAULT_SEED, caller.key().as_ref()], bump)]
     pub vault: Account<'info, VaultState>,
 }
 
@@ -411,7 +540,7 @@ pub struct ClaimDlcTimeout<'info> {
 pub struct CloseDlc<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
-    #[account(mut)]
+    #[account(mut, seeds = [VAULT_SEED, authority.key().as_ref()], bump)]
     pub vault: Account<'info, VaultState>,
 }
 
@@ -419,8 +548,22 @@ pub struct CloseDlc<'info> {
 pub struct EnterGracePeriod<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
+    #[account(seeds = [PROTOCOL_CONFIG_SEED], bump)]
+    pub protocol_config: Account<'info, ProtocolConfig>,
     #[account(mut)]
     pub vault: Account<'info, VaultState>,
+}
+
+#[derive(Accounts)]
+pub struct LiquidateVaultCpi<'info> {
+    #[account(mut)]
+    pub liquidator: Signer<'info>,
+    #[account(seeds = [PROTOCOL_CONFIG_SEED], bump)]
+    pub protocol_config: Account<'info, ProtocolConfig>,
+    #[account(mut)]
+    pub vault: Account<'info, VaultState>,
+    /// CHECK: validated against protocol_config.liquidation_program_id
+    pub liquidation_program: UncheckedAccount<'info>,
 }
 
 #[account]
@@ -439,11 +582,14 @@ pub struct ProtocolConfig {
     pub admin: Pubkey,
     pub groth16_verifier_program_id: Pubkey,
     pub oracle_price_feed_id: Pubkey,
+    pub liquidation_program_id: Pubkey,
+    pub authorized_relayer_pubkey_x: [u8; 32],
+    pub authorized_relayer_pubkey_y: [u8; 32],
     pub updated_at: i64,
 }
 
 impl ProtocolConfig {
-    pub const LEN: usize = 32 + 32 + 32 + 8;
+    pub const LEN: usize = 32 + 32 + 32 + 32 + 32 + 32 + 8;
 }
 
 #[account]
@@ -511,7 +657,19 @@ pub struct ProtocolConfigUpdatedEvent {
     pub admin: Pubkey,
     pub groth16_verifier_program_id: Pubkey,
     pub oracle_price_feed_id: Pubkey,
+    pub liquidation_program_id: Pubkey,
     pub updated_at: i64,
+    pub authorized_relayer_pubkey_x: [u8; 32],
+    pub authorized_relayer_pubkey_y: [u8; 32],
+}
+
+#[event]
+pub struct VaultLiquidatedByProtocolEvent {
+    pub vault_owner: Pubkey,
+    pub liquidator: Pubkey,
+    pub collateral_seized: u64,
+    pub liquidator_reward: u64,
+    pub timestamp: i64,
 }
 
 #[error_code]
@@ -538,6 +696,8 @@ pub enum SolvusError {
     BurnInGracePeriod,
     #[msg("Math overflow")]
     MathOverflow,
+    #[msg("Burn is not allowed in the current vault state")]
+    BurnNotAllowedInCurrentState,
     #[msg("Vault is not in PendingBtcRelease state")]
     VaultNotPendingBtcRelease,
     #[msg("DLC close deadline not reached")]
@@ -546,4 +706,14 @@ pub enum SolvusError {
     OutstandingDebt,
     #[msg("Unauthorized")]
     Unauthorized,
+    #[msg("Relayer public key is not authorized by protocol config")]
+    UnauthorizedRelayer,
+    #[msg("Insufficient BTC collateral for requested sum")]
+    InsufficientCollateral,
+    #[msg("Vault is not in a liquidatable state")]
+    VaultNotLiquidatable,
+    #[msg("Caller is not an authorized liquidator")]
+    UnauthorizedLiquidator,
+    #[msg("Liquidation amount exceeds collateral")]
+    InvalidLiquidationAmount,
 }

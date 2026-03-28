@@ -12,6 +12,9 @@ import {
 } from '../shared/utils';
 import { BitcoinIndexer, FetchRelayerDataParams, RelayerSigner, Utxo } from './types';
 
+export * from './types';
+export * from './state';
+
 function computeOldestUtxoAgeInDays(utxos: Utxo[], now: number): number {
   if (utxos.length === 0) {
     return 0;
@@ -71,6 +74,19 @@ export async function fetchRelayerData(params: FetchRelayerDataParams): Promise<
   validateBitcoinAddress(params.btcAddress);
   validateBytesLength(params.userPubkeyX, 32, 'user_pubkey_x');
 
+  // Check for replay if state store provided
+  if (params.stateStore && !params.allowReuse) {
+    const existing = await params.stateStore.getRecord(params.solanaAddress);
+    if (existing) {
+      throw new Error(
+        `Relayer has already signed for Solana address ${params.solanaAddress} at ${new Date(
+          existing.signedAt * 1000,
+        ).toISOString()}. ` +
+          `Replay is not allowed. Use a different address or wait for nullifier to be consumed on-chain.`,
+      );
+    }
+  }
+
   if (params.indexer.hasActiveDlc && (await params.indexer.hasActiveDlc(params.btcAddress))) {
     throw new Error(`BTC address ${params.btcAddress} is already locked in an active DLC`);
   }
@@ -84,6 +100,17 @@ export async function fetchRelayerData(params: FetchRelayerDataParams): Promise<
   const commitment = await computeRelayerCommitment(params.userPubkeyX, btc_data, timestamp);
   const signature = await params.signer.signCommitment(commitment);
   const publicKey = await params.signer.getPublicKeyXY();
+
+  // Record signing after success
+  if (params.stateStore) {
+    await params.stateStore.recordSigning({
+      solanaAddress: params.solanaAddress,
+      signedAt: now,
+      btcAddress: params.btcAddress,
+      btcData: btc_data,
+      nullifierCommitment: commitment,
+    });
+  }
 
   return {
     btc_data,

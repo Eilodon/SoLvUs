@@ -81,8 +81,20 @@ export function sha256Hex(value: string | Uint8Array): Hex {
   return `0x${hash.digest('hex')}` as Hex;
 }
 
+function stableReplacer(_key: string, value: unknown): unknown {
+  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+    return Object.keys(value as object)
+      .sort()
+      .reduce((acc: Record<string, unknown>, k) => {
+        acc[k] = (value as Record<string, unknown>)[k];
+        return acc;
+      }, {});
+  }
+  return value;
+}
+
 export function stableJsonHash(value: unknown): Hex {
-  return sha256Hex(JSON.stringify(value, Object.keys(value as object).sort()));
+  return sha256Hex(JSON.stringify(value, stableReplacer));
 }
 
 export function stripRecoveryByte(sigBase64: string): Uint8Array {

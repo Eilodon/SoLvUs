@@ -9,3 +9,4 @@ name = "liquidation"
 
 [dependencies]
 anchor-lang = "0.31.1"
+solvus = { path = "../solvus", features = ["cpi"] }

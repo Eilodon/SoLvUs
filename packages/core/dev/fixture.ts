@@ -4,7 +4,7 @@ import { hashMintMessage } from '../client/user_sig';
 import { computeNullifierSecret } from '../identity/nullifier_secret';
 import { buildProverInputs } from '../prover/inputs';
 import { computeNonce } from '../prover/nonce';
-import { MockBitcoinIndexer, Secp256k1EnvRelayerSigner, fetchRelayerData } from '../relayer';
+import { MockBitcoinIndexer, Secp256k1EnvRelayerSigner, fetchRelayerData, RelayerStateStore } from '../relayer';
 import { bytesToHex, hexToBytes } from '../shared/utils';
 
 export const DEV_USER_PRIVATE_KEY =
@@ -40,6 +40,7 @@ export interface DynamicDevMintFixtureParams {
   timestamp?: number;
   user_private_key?: Hex;
   relayer_private_key?: Hex;
+  stateStore?: RelayerStateStore;
 }
 
 interface BuildDevMintFixtureParams {
@@ -49,6 +50,7 @@ interface BuildDevMintFixtureParams {
   badge_type: BadgeType;
   solana_address: Hex;
   timestamp: number;
+  stateStore?: RelayerStateStore;
 }
 
 async function buildDevMintFixture(params: BuildDevMintFixtureParams): Promise<DevMintFixture> {
@@ -69,9 +71,11 @@ async function buildDevMintFixture(params: BuildDevMintFixtureParams): Promise<D
     btcAddress: params.btc_address,
     badgeType: params.badge_type,
     userPubkeyX: user_pubkey_x,
+    solanaAddress: params.solana_address,
     indexer: new MockBitcoinIndexer(),
     signer: new Secp256k1EnvRelayerSigner(params.relayer_private_key),
     now: params.timestamp,
+    stateStore: params.stateStore,
   });
 
   const prover_inputs = await buildProverInputs({
@@ -125,5 +129,6 @@ export async function createDynamicDevMintFixture(
     badge_type: params.badge_type ?? DEV_BADGE_TYPE,
     solana_address: params.solana_address,
     timestamp: params.timestamp ?? Math.floor(Date.now() / 1000),
+    stateStore: params.stateStore,
   });
 }

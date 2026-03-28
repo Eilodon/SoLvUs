@@ -36,8 +36,8 @@ fn bytes32_to_field(bytes: [u8; 32]) -> Field {
 fn main(
     solana_address: [u8; 32],
     nonce: Field,
-    relayer_pubkey_x: [u8; 32],
-    relayer_pubkey_y: [u8; 32],
+    relayer_pubkey_x: pub [u8; 32],
+    relayer_pubkey_y: pub [u8; 32],
     badge_type: u8,
     threshold: u64,
     is_upper_bound: bool,
@@ -48,7 +48,7 @@ fn main(
     pubkey_x: [u8; 32],
     pubkey_y: [u8; 32],
     user_sig: [u8; 64],
-    btc_data: u64,
+    btc_data: pub u64,
     relayer_sig: [u8; 64],
 ) {
     let solana_address_field = bytes32_to_field(solana_address);

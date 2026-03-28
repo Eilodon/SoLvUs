@@ -13,7 +13,7 @@ export const GROTH16_PUBLIC_INPUT_FIELD_COUNT = 9;
 export const GROTH16_PUBLIC_INPUT_FIELD_BYTES = 32;
 export const GROTH16_PUBLIC_INPUTS_TOTAL_BYTES =
   GROTH16_PUBLIC_INPUT_FIELD_COUNT * GROTH16_PUBLIC_INPUT_FIELD_BYTES;
-export const GROTH16_VERIFIER_PUBLIC_INPUT_COUNT = 1;
+export const GROTH16_VERIFIER_PUBLIC_INPUT_COUNT = 66;
 export const GROTH16_VERIFIER_PUBLIC_INPUT_HEADER_BYTES = 12;
 export const GROTH16_VERIFIER_PUBLIC_INPUTS_TOTAL_BYTES =
   GROTH16_VERIFIER_PUBLIC_INPUT_HEADER_BYTES +
@@ -135,7 +135,18 @@ function encodeVerifierWitnessHeader(publicInputCount: number): Buffer {
 }
 
 export function collectVerifierPublicInputs(inputs: ProverInputs): Hex[] {
-  return [inputs.nullifier_hash];
+  const bytesX = hexToBytes(inputs.relayer_pubkey_x);
+  const bytesY = hexToBytes(inputs.relayer_pubkey_y);
+  const fields: Hex[] = [];
+  for (let i = 0; i < 32; i++) {
+    fields.push(fieldToHex32(BigInt(bytesX[i])));
+  }
+  for (let i = 0; i < 32; i++) {
+    fields.push(fieldToHex32(BigInt(bytesY[i])));
+  }
+  fields.push(inputs.nullifier_hash);
+  fields.push(fieldToHex32(BigInt(inputs.btc_data)));
+  return fields;
 }
 
 export function serializeVerifierPublicInputs(inputs: ProverInputs): Hex {

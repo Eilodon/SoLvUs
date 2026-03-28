@@ -98,6 +98,8 @@ export interface ProtocolConfig {
   admin: Hex;
   groth16_verifier_program_id: string;
   oracle_price_feed_id: string;
+  authorized_relayer_pubkey_x: Hex;
+  authorized_relayer_pubkey_y: Hex;
   updated_at: number;
 }
 

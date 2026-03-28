@@ -16,13 +16,18 @@ export interface RelayerSigner {
   signCommitment(commitment: Hex): Promise<Hex>;
 }
 
+import { RelayerStateStore } from './state';
+
 export interface FetchRelayerDataParams {
   btcAddress: string;
   badgeType: BadgeType;
   userPubkeyX: Hex;
+  solanaAddress: Hex;       // ADD — needed for dedup check
   indexer: BitcoinIndexer;
   signer: RelayerSigner;
+  stateStore?: RelayerStateStore;   // ADD — optional for backward compat
   now?: number;
+  allowReuse?: boolean;     // ADD — for testing; defaults to false
 }
 
 export type { RelayerResponse };

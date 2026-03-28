@@ -4,6 +4,9 @@ import dotenv from 'dotenv';
 import express from 'express';
 import path from 'path';
 import { PublicKey } from '@solana/web3.js';
+import { InMemoryRelayerStore } from '../core/relayer/state';
+
+const relayerStateStore = new InMemoryRelayerStore();
 
 const workspaceRoot = path.join(__dirname, '../..');
 const solvusEnv = process.env.SOLVUS_ENV || 'devnet';
@@ -155,6 +158,7 @@ app.post('/prepare-devnet-mint', async (req, res) => {
     const owner = new PublicKey(ownerPubkey);
     const fixture = await createDynamicDevMintFixture({
       solana_address: bytesToHex(owner.toBytes()),
+      stateStore: relayerStateStore,
     });
     assertValidProverInputs(fixture.prover_inputs);
 
