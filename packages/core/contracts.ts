@@ -65,6 +65,7 @@ export interface MintZkUSDInput {
   zkusd_amount: number;
   proof: Hex;
   public_inputs: Hex;
+  l1_refund_timelock: number;
   relayer_fee?: number;
 }
 

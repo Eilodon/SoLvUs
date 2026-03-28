@@ -14,6 +14,7 @@ export interface PrepareMintRequestParams {
   userSignature: Hex;
   zkusdAmount: number;
   dlcContractId: Hex;
+  l1RefundTimelock: number;
   indexer: BitcoinIndexer;
   signer: RelayerSigner;
 }
@@ -49,6 +50,7 @@ export async function prepareMintRequest(params: PrepareMintRequestParams): Prom
     zkusd_amount: params.zkusdAmount,
     proof: '0x',
     public_inputs,
+    l1_refund_timelock: params.l1RefundTimelock,
   };
 
   return {

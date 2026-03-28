@@ -82,6 +82,12 @@ function encodeU64LE(value: number): Buffer {
   return buffer;
 }
 
+function encodeI64LE(value: number): Buffer {
+  const buffer = Buffer.alloc(8);
+  buffer.writeBigInt64LE(BigInt(value), 0);
+  return buffer;
+}
+
 function encodeMintZkUsdInstruction(input: MintZkUSDInput): Buffer {
   const proofBytes = Buffer.from(hexToBytes(input.proof));
   const publicInputBytes = Buffer.from(hexToBytes(input.public_inputs));
@@ -94,6 +100,7 @@ function encodeMintZkUsdInstruction(input: MintZkUSDInput): Buffer {
     proofBytes,
     encodeU32LE(publicInputBytes.length),
     publicInputBytes,
+    encodeI64LE(input.l1_refund_timelock),
   ]);
 }
 

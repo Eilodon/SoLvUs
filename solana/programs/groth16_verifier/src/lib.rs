@@ -7,7 +7,7 @@ use solana_program::program_error::ProgramError;
 use solana_program::pubkey::Pubkey;
 
 const EXPECTED_PROOF_BYTES: usize = 320;
-const EXPECTED_PUBLIC_INPUT_BYTES: usize = 2124;
+const EXPECTED_PUBLIC_INPUT_BYTES: usize = 2220;
 
 entrypoint!(process_instruction);
 

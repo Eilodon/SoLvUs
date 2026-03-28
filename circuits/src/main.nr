@@ -59,6 +59,7 @@ fn main(
     assert(computed_sol_hi == sol_hi);
     assert(computed_sol_lo == sol_lo);
     let address_hex = bytes_to_hex64(solana_address);
+    let dlc_hex = bytes_to_hex64(dlc_contract_id.to_be_bytes::<32>());
 
     let bsm_prefix: [u8; 26] = [
         0x18, 0x42, 0x69, 0x74, 0x63, 0x6f, 0x69, 0x6e, 0x20, 0x53, 0x69, 0x67, 0x6e, 0x65, 0x64, 0x20,
@@ -68,7 +69,7 @@ fn main(
     let mut full_message = [0; 154];
     for i in 0..26 { full_message[i] = bsm_prefix[i]; }
     for i in 0..64 { full_message[26 + i] = address_hex[i]; }
-    for i in 0..64 { full_message[90 + i] = address_hex[i]; }
+    for i in 0..64 { full_message[90 + i] = dlc_hex[i]; }
 
     let user_message_hash = sha256::digest(sha256::digest(full_message));
     assert(verify_signature(pubkey_x, pubkey_y, user_sig, user_message_hash));
