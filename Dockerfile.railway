@@ -14,7 +14,17 @@ COPY packages/core/tsconfig.json packages/core/
 
 # Copy source code
 COPY packages/frontend/src packages/frontend/src
-COPY packages/core/src packages/core/src
+COPY packages/core/client packages/core/client
+COPY packages/core/compliance packages/core/compliance
+COPY packages/core/dev packages/core/dev
+COPY packages/core/identity packages/core/identity
+COPY packages/core/orchestrator.ts packages/core/orchestrator.ts
+COPY packages/core/prover packages/core/prover
+COPY packages/core/relayer packages/core/relayer
+COPY packages/core/shared packages/core/shared
+COPY packages/core/index.ts packages/core/index.ts
+COPY packages/core/config.ts packages/core/config.ts
+COPY packages/core/contracts.ts packages/core/contracts.ts
 
 # Install deps and build
 RUN npm ci --workspace=@solvus/frontend --workspace=@solvus/core && \
