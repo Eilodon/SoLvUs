@@ -1,6 +1,6 @@
 import { randomBytes } from 'crypto';
 import { secp256k1 } from '@noble/curves/secp256k1';
-import { BadgeType, BN254_PRIME, Hex, ProverInputs, RelayerResponse } from '../contracts';
+import { CollateralProfile, BN254_PRIME, Hex, ProverInputs, RelayerResponse } from '../contracts';
 import { hashMintMessage } from '../client/user_sig';
 import { buildProverInputs } from '../prover/inputs';
 import { MockBitcoinIndexer, Secp256k1EnvRelayerSigner, fetchRelayerData } from '../relayer';
@@ -17,13 +17,13 @@ export const DEV_DLC_CONTRACT_ID =
   '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex;
 export const DEV_NULLIFIER_SECRET =
   '0x0b785be5a226b8d22eb1633da6f8e988cd5e6618cd00e8d9faffa55cba1f1282' as Hex;
-export const DEV_BADGE_TYPE = BadgeType.Whale;
+export const DEV_COLLATERAL_PROFILE = CollateralProfile.Balance;
 
 export interface DevMintFixture {
   user_private_key: Hex;
   relayer_private_key: Hex;
   btc_address: string;
-  badge_type: BadgeType;
+  collateral_profile: CollateralProfile;
   solana_address: Hex;
   dlc_contract_id: Hex;
   user_pubkey_x: Hex;
@@ -36,7 +36,7 @@ export interface DevMintFixture {
 export interface DynamicDevMintFixtureParams {
   solana_address: Hex;
   btc_address?: string;
-  badge_type?: BadgeType;
+  collateral_profile?: CollateralProfile;
   dlc_contract_id?: Hex;
   nullifier_secret?: Hex;
   user_private_key?: Hex;
@@ -47,7 +47,7 @@ interface BuildDevMintFixtureParams {
   user_private_key: Hex;
   relayer_private_key: Hex;
   btc_address: string;
-  badge_type: BadgeType;
+  collateral_profile: CollateralProfile;
   solana_address: Hex;
   dlc_contract_id: Hex;
   nullifier_secret: Hex;
@@ -67,7 +67,7 @@ async function buildDevMintFixture(params: BuildDevMintFixtureParams): Promise<D
 
   const relayer_response = await fetchRelayerData({
     btcAddress: params.btc_address,
-    badgeType: params.badge_type,
+    collateralProfile: params.collateral_profile,
     userPubkeyX: user_pubkey_x,
     solanaAddress: params.solana_address,
     dlcContractId: params.dlc_contract_id,
@@ -81,7 +81,7 @@ async function buildDevMintFixture(params: BuildDevMintFixtureParams): Promise<D
     user_sig,
     relayer_response,
     solana_address: params.solana_address,
-    badge_type: params.badge_type,
+    collateral_profile: params.collateral_profile,
     nullifier_secret: params.nullifier_secret,
   });
 
@@ -89,7 +89,7 @@ async function buildDevMintFixture(params: BuildDevMintFixtureParams): Promise<D
     user_private_key: params.user_private_key,
     relayer_private_key: params.relayer_private_key,
     btc_address: params.btc_address,
-    badge_type: params.badge_type,
+    collateral_profile: params.collateral_profile,
     solana_address: params.solana_address,
     dlc_contract_id: params.dlc_contract_id,
     user_pubkey_x,
@@ -110,7 +110,7 @@ export async function createDevMintFixture(): Promise<DevMintFixture> {
     user_private_key: DEV_USER_PRIVATE_KEY,
     relayer_private_key: DEV_RELAYER_PRIVATE_KEY,
     btc_address: DEV_BTC_ADDRESS,
-    badge_type: DEV_BADGE_TYPE,
+    collateral_profile: DEV_COLLATERAL_PROFILE,
     solana_address: DEV_SOLANA_ADDRESS,
     dlc_contract_id: DEV_DLC_CONTRACT_ID,
     nullifier_secret: DEV_NULLIFIER_SECRET,
@@ -128,7 +128,7 @@ export async function createDynamicDevMintFixture(
     user_private_key,
     relayer_private_key: params.relayer_private_key ?? DEV_RELAYER_PRIVATE_KEY,
     btc_address: params.btc_address ?? DEV_BTC_ADDRESS,
-    badge_type: params.badge_type ?? DEV_BADGE_TYPE,
+    collateral_profile: params.collateral_profile ?? DEV_COLLATERAL_PROFILE,
     solana_address: params.solana_address,
     dlc_contract_id: params.dlc_contract_id ?? DEV_DLC_CONTRACT_ID,
     nullifier_secret,

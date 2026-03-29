@@ -32,7 +32,7 @@ fn main(
     sol_lo: pub Field,
     relayer_pubkey_x: pub [u8; 32],
     relayer_pubkey_y: pub [u8; 32],
-    badge_type: u8,
+    collateral_profile: u8,
     threshold: u64,
     is_upper_bound: bool,
     dlc_contract_id: pub Field,
@@ -45,9 +45,10 @@ fn main(
     btc_data: pub u64,
     relayer_sig: [u8; 64],
 ) {
-    // Badge type validation: 1=Whale, 2=Hodler, 3=Stacker
-    assert(badge_type >= 1);
-    assert(badge_type <= 3);
+    // Collateral profile validation:
+    // 1 = balance profile, 2 = vintage profile, 3 = distribution profile.
+    assert(collateral_profile >= 1);
+    assert(collateral_profile <= 3);
 
     let (computed_sol_hi, computed_sol_lo) = split_to_128bit_fields(solana_address);
     assert(computed_sol_hi == sol_hi);
@@ -91,7 +92,7 @@ fn main(
 
     let expected_nullifier_hash = legacy_poseidon::bn254::hash_4([
         dlc_contract_id,
-        badge_type as Field,
+        collateral_profile as Field,
         nullifier_secret,
         0,
     ]);

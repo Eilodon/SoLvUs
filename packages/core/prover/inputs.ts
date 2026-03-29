@@ -1,4 +1,10 @@
-import { BadgeType, getThresholdForBadge, Hex, ProverInputs, RelayerResponse } from '../contracts';
+import {
+  CollateralProfile,
+  getThresholdForCollateralProfile,
+  Hex,
+  ProverInputs,
+  RelayerResponse,
+} from '../contracts';
 import {
   bytes32BEToField,
   bytesToHex,
@@ -29,13 +35,13 @@ export interface BuildProverInputsParams {
   user_sig: Hex;
   relayer_response: RelayerResponse;
   solana_address: Hex;
-  badge_type: BadgeType;
+  collateral_profile: CollateralProfile;
   nullifier_secret: Hex;
 }
 
 export async function computeNullifierHash(
   dlcContractId: Hex,
-  badgeType: BadgeType,
+  collateralProfile: CollateralProfile,
   nullifierSecret: Hex,
 ): Promise<Hex> {
   validateBytesLength(dlcContractId, 32, 'dlc_contract_id');
@@ -44,7 +50,7 @@ export async function computeNullifierHash(
   const secretBigInt = bytes32BEToField(nullifierSecret);
   const hash = await poseidonHash([
     dlcBigInt,
-    BigInt(badgeType),
+    BigInt(collateralProfile),
     secretBigInt,
     0n,
   ]);
@@ -64,7 +70,7 @@ export async function buildProverInputs(params: BuildProverInputsParams): Promis
 
   const nullifier_hash = await computeNullifierHash(
     params.relayer_response.dlc_contract_id,
-    params.badge_type,
+    params.collateral_profile,
     params.nullifier_secret,
   );
 
@@ -79,8 +85,8 @@ export async function buildProverInputs(params: BuildProverInputsParams): Promis
     solana_address: params.solana_address,
     relayer_pubkey_x: params.relayer_response.pubkey_x,
     relayer_pubkey_y: params.relayer_response.pubkey_y,
-    badge_type: params.badge_type,
-    threshold: getThresholdForBadge(params.badge_type),
+    collateral_profile: params.collateral_profile,
+    threshold: getThresholdForCollateralProfile(params.collateral_profile),
     is_upper_bound: false,
     nullifier_hash,
   };
@@ -92,7 +98,7 @@ export function collectPublicInputs(inputs: ProverInputs): Hex[] {
     inputs.dlc_contract_id,
     inputs.relayer_pubkey_x,
     inputs.relayer_pubkey_y,
-    fieldToHex32(BigInt(inputs.badge_type)),
+    fieldToHex32(BigInt(inputs.collateral_profile)),
     fieldToHex32(BigInt(inputs.threshold)),
     fieldToHex32(inputs.is_upper_bound ? 1n : 0n),
     inputs.nullifier_hash,
@@ -207,7 +213,7 @@ export function serializeCircuitInputsToToml(inputs: ProverInputs): string {
     `sol_lo = "${fieldToHex32(solLo)}"`,
     `relayer_pubkey_x = ${hexToTomlByteArray(inputs.relayer_pubkey_x)}`,
     `relayer_pubkey_y = ${hexToTomlByteArray(inputs.relayer_pubkey_y)}`,
-    `badge_type = ${inputs.badge_type}`,
+    `collateral_profile = ${inputs.collateral_profile}`,
     `threshold = ${inputs.threshold}`,
     `is_upper_bound = ${inputs.is_upper_bound}`,
     `dlc_contract_id = "${inputs.dlc_contract_id}"`,

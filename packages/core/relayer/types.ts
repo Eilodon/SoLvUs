@@ -1,4 +1,4 @@
-import { BadgeType, Hex, RelayerResponse } from '../contracts';
+import { CollateralProfile, Hex, RelayerResponse } from '../contracts';
 
 export interface Utxo {
   value: number;
@@ -18,7 +18,7 @@ export interface RelayerSigner {
 
 export interface FetchRelayerDataParams {
   btcAddress: string;
-  badgeType: BadgeType;
+  collateralProfile: CollateralProfile;
   userPubkeyX: Hex;
   solanaAddress: Hex;
   dlcContractId: Hex;

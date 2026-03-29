@@ -34,6 +34,8 @@ const oraclePriceFeedId = new PublicKey(
 const liquidationProgramId = new PublicKey(
   process.env.LIQUIDATION_PROGRAM_ID || "FuNY9NZLWdegyDQHJiGjzsWcSeYG8s7nsAvaqUrk8HZt",
 );
+const collateralRatioBps = BigInt(process.env.COLLATERAL_RATIO_BPS || "15000");
+const oracleMaxStalenessSeconds = BigInt(process.env.ORACLE_MAX_STALENESS_SECONDS || "60");
 
 const defaultRelayerPrivateKey = process.env.RELAYER_SECP256K1_PRIVATE_KEY || `0x${"22".repeat(32)}`;
 const defaultRelayerPublicKey = secp256k1.getPublicKey(
@@ -64,6 +66,7 @@ if (!existsSync(walletPath)) {
 
 const walletBytes = Uint8Array.from(JSON.parse(readFileSync(walletPath, "utf8")));
 const payer = Keypair.fromSecretKey(walletBytes);
+const complianceAdmin = new PublicKey(process.env.COMPLIANCE_ADMIN_PUBKEY || payer.publicKey.toBase58());
 const [protocolConfigPda] = PublicKey.findProgramAddressSync(
   [Buffer.from("protocol_config", "utf8")],
   solvusProgramId,
@@ -77,10 +80,17 @@ function encodePubkeys(...pubkeys) {
   return Buffer.concat(pubkeys.map((pubkey) => pubkey.toBuffer()));
 }
 
+function encodeU64LE(value) {
+  const buffer = Buffer.alloc(8);
+  buffer.writeBigUInt64LE(value);
+  return buffer;
+}
+
 async function main() {
   const connection = new Connection(connectionUrl, "confirmed");
   const accountInfo = await connection.getAccountInfo(protocolConfigPda);
   const instructionName = accountInfo ? "update_protocol_config" : "initialize_protocol_config";
+  const nextProtocolAdmin = new PublicKey(process.env.NEXT_PROTOCOL_ADMIN_PUBKEY || payer.publicKey.toBase58());
   const keys = accountInfo
     ? [
         { pubkey: payer.publicKey, isSigner: true, isWritable: true },
@@ -92,12 +102,29 @@ async function main() {
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       ];
 
-  const data = Buffer.concat([
-    discriminator(instructionName),
-    encodePubkeys(verifierProgramId, oraclePriceFeedId, liquidationProgramId),
-    relayerPubkeyX,
-    relayerPubkeyY,
-  ]);
+  const data = accountInfo
+    ? Buffer.concat([
+        discriminator(instructionName),
+        encodePubkeys(
+          nextProtocolAdmin,
+          complianceAdmin,
+          verifierProgramId,
+          oraclePriceFeedId,
+          liquidationProgramId,
+        ),
+        relayerPubkeyX,
+        relayerPubkeyY,
+        encodeU64LE(collateralRatioBps),
+        encodeU64LE(oracleMaxStalenessSeconds),
+      ])
+    : Buffer.concat([
+        discriminator(instructionName),
+        encodePubkeys(complianceAdmin, verifierProgramId, oraclePriceFeedId, liquidationProgramId),
+        relayerPubkeyX,
+        relayerPubkeyY,
+        encodeU64LE(collateralRatioBps),
+        encodeU64LE(oracleMaxStalenessSeconds),
+      ]);
 
   const instruction = new TransactionInstruction({
     programId: solvusProgramId,
@@ -107,11 +134,15 @@ async function main() {
 
   console.log(`cluster: ${connectionUrl}`);
   console.log(`wallet: ${payer.publicKey.toBase58()}`);
+  console.log(`next protocol admin: ${nextProtocolAdmin.toBase58()}`);
+  console.log(`compliance admin: ${complianceAdmin.toBase58()}`);
   console.log(`solvus program: ${solvusProgramId.toBase58()}`);
   console.log(`protocol_config pda: ${protocolConfigPda.toBase58()}`);
   console.log(`verifier program: ${verifierProgramId.toBase58()}`);
   console.log(`oracle price feed: ${oraclePriceFeedId.toBase58()}`);
   console.log(`liquidation program: ${liquidationProgramId.toBase58()}`);
+  console.log(`collateral ratio bps: ${collateralRatioBps.toString()}`);
+  console.log(`oracle max staleness seconds: ${oracleMaxStalenessSeconds.toString()}`);
   console.log(`relayer pubkey x: 0x${relayerPubkeyX.toString("hex")}`);
   console.log(`relayer pubkey y: 0x${relayerPubkeyY.toString("hex")}`);
   console.log(`instruction: ${instructionName}`);

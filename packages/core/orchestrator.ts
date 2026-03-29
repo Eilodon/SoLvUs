@@ -1,4 +1,4 @@
-import { BadgeType, Hex, MintZkUSDInput, ProofResponse } from './contracts';
+import { CollateralProfile, Hex, MintZkUSDInput, ProofResponse } from './contracts';
 import { buildMintMessage } from './client/user_sig';
 import { fetchRelayerData } from './relayer';
 import { BitcoinIndexer, RelayerSigner } from './relayer/types';
@@ -8,7 +8,7 @@ import { sha256Hex } from './shared/utils';
 export interface PrepareMintRequestParams {
   btcAddress: string;
   solanaAddress: Hex;
-  badgeType: BadgeType;
+  collateralProfile: CollateralProfile;
   userPubkeyX: Hex;
   userPubkeyY: Hex;
   userSignature: Hex;
@@ -28,7 +28,7 @@ export async function prepareMintRequest(params: PrepareMintRequestParams): Prom
 }> {
   const relayer_response = await fetchRelayerData({
     btcAddress: params.btcAddress,
-    badgeType: params.badgeType,
+    collateralProfile: params.collateralProfile,
     userPubkeyX: params.userPubkeyX,
     solanaAddress: params.solanaAddress,
     dlcContractId: params.dlcContractId,
@@ -42,7 +42,7 @@ export async function prepareMintRequest(params: PrepareMintRequestParams): Prom
     user_sig: params.userSignature,
     relayer_response,
     solana_address: params.solanaAddress,
-    badge_type: params.badgeType,
+    collateral_profile: params.collateralProfile,
     nullifier_secret: params.nullifierSecret,
   });
 

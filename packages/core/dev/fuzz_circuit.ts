@@ -2,7 +2,7 @@ import { randomBytes, bytesToHex } from '@noble/hashes/utils';
 import { sha512 } from '@noble/hashes/sha512';
 import { mod } from '@noble/curves/abstract/modular';
 import { computeRelayerCommitment } from '../relayer/index';
-import { BadgeType, Hex, BN254_PRIME } from '../contracts';
+import { CollateralProfile, Hex, BN254_PRIME } from '../contracts';
 import { bytes32BEToField, fieldToHex32, hexToBytes, poseidonHash } from '../shared/utils';
 
 function generateRandomHex(length: number): Hex {
@@ -15,12 +15,12 @@ function generateRandomSignature(): Hex {
 
 async function computeNullifierHash(
   dlcContractId: Hex,
-  badgeType: BadgeType
+  collateralProfile: CollateralProfile
 ): Promise<bigint> {
   const dlcBigInt = bytes32BEToField(dlcContractId);
   const hash = await poseidonHash([
     dlcBigInt,
-    BigInt(badgeType),
+    BigInt(collateralProfile),
     0n,
     0n,
   ]);
@@ -48,7 +48,7 @@ async function runFuzzing(iterations: number = 1000): Promise<FuzzResult[]> {
   const validRelayerPubkeyX = generateRandomHex(32);
   const validRelayerPubkeyY = generateRandomHex(32);
   const validRelayerSig = generateRandomSignature();
-  const validBadgeType = BadgeType.Whale;
+  const validCollateralProfile = CollateralProfile.Balance;
   const validThreshold = 50_000_000n;
 
   const validCommitment = await computeRelayerCommitment(
@@ -58,7 +58,7 @@ async function runFuzzing(iterations: number = 1000): Promise<FuzzResult[]> {
   );
   const validNullifierHash = await computeNullifierHash(
     validDlcContractId,
-    validBadgeType
+    validCollateralProfile
   );
 
   console.log('\n✅ Valid Baseline Created:');
@@ -149,7 +149,7 @@ async function runFuzzing(iterations: number = 1000): Promise<FuzzResult[]> {
     
     const fakeNullifierHash = await computeNullifierHash(
       randomHex as Hex,
-      validBadgeType
+      validCollateralProfile
     );
     
     if (fakeNullifierHash === validNullifierHash) {

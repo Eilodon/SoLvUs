@@ -9,6 +9,7 @@ const rootDir = resolve(new URL(".", import.meta.url).pathname, "..");
 dotenv.config({ path: resolve(rootDir, "config/devnet.env") });
 
 const serverUrl = process.env.PROVER_SERVER_URL || "http://localhost:3001";
+const complianceApiKey = process.env.COMPLIANCE_API_KEY || "";
 const walletPath = process.env.SOLANA_WALLET || resolve(process.env.HOME || "", ".config/solana/id.json");
 const smokeAmount = Number.parseInt(process.env.STABLEHACKS_SMOKE_ZKUSD_AMOUNT || "1000000", 10);
 const permitTtlSeconds = Number.parseInt(process.env.STABLEHACKS_SMOKE_PERMIT_TTL || "900", 10);
@@ -37,11 +38,15 @@ async function getJson(path, params = {}) {
 }
 
 async function postJson(path, payload) {
+  const headers = {
+    "Content-Type": "application/json",
+  };
+  if (complianceApiKey) {
+    headers["x-api-key"] = complianceApiKey;
+  }
   const response = await fetch(new URL(path, serverUrl), {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
+    headers,
     body: JSON.stringify(payload),
   });
   const body = await response.json();
@@ -103,6 +108,16 @@ async function phaseOneComplianceControls() {
     nullifier_hash: nullifierHash,
   });
   console.log("[phase-1] revoke signature:", revoked.signature);
+
+  const paused = await postJson("/protocol/pause", {
+    paused: true,
+  });
+  console.log("[phase-1] protocol pause signature:", paused.signature);
+
+  const resumed = await postJson("/protocol/pause", {
+    paused: false,
+  });
+  console.log("[phase-1] protocol resume signature:", resumed.signature);
 
   const revokedState = await getJson("/compliance/state", {
     institution_id_hash: institutionIdHash,

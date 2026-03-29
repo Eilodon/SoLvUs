@@ -130,6 +130,29 @@ export interface PermissionedStateSnapshot {
   permit: CompliancePermitState | null;
 }
 
+function buildPlaceholderPermissionProfile(institutionIdHash: Hex): InstitutionPermissionProfile {
+  return {
+    institution_id_hash: institutionIdHash,
+    institution_label: '',
+    kyb_ref_hash: '0x0000000000000000000000000000000000000000000000000000000000000000',
+    travel_rule_ref_hash: '0x0000000000000000000000000000000000000000000000000000000000000000',
+    kyb_provider_ref_hash: '0x0000000000000000000000000000000000000000000000000000000000000000',
+    travel_rule_provider_ref_hash: '0x0000000000000000000000000000000000000000000000000000000000000000',
+    travel_rule_decision_ref_hash: '0x0000000000000000000000000000000000000000000000000000000000000000',
+    originator_vasp_ref_hash: '0x0000000000000000000000000000000000000000000000000000000000000000',
+    beneficiary_vasp_ref_hash: '0x0000000000000000000000000000000000000000000000000000000000000000',
+    kyb_provider_label: '',
+    travel_rule_provider_label: '',
+    originator_vasp_label: '',
+    beneficiary_vasp_label: '',
+    permit_expires_at: 0,
+    kyt_score: 0,
+    daily_mint_cap: 0,
+    lifetime_mint_cap: 0,
+    travel_rule_required: true,
+  };
+}
+
 interface HermesLatestPriceFeed {
   vaa?: string;
   price?: {
@@ -257,6 +280,10 @@ function encodeSetInstitutionStatusInstruction(
     encodeHex32(institutionIdHash, 'institution_id_hash'),
     encodeInstitutionStatus(status),
   ]);
+}
+
+function encodeSetProtocolPauseInstruction(paused: boolean): Buffer {
+  return Buffer.concat([discriminator('set_protocol_pause'), encodeBool(paused)]);
 }
 
 function encodeRevokeCompliancePermitInstruction(
@@ -1216,17 +1243,7 @@ export async function fetchPermissionedState(
   const programId = new PublicKey(config.solvusProgramId);
   const accounts = getPermissionedMintAccounts(
     programId,
-    {
-      institution_id_hash: institutionIdHash,
-      institution_label: '',
-      kyb_ref_hash: '0x0000000000000000000000000000000000000000000000000000000000000000',
-      travel_rule_ref_hash: '0x0000000000000000000000000000000000000000000000000000000000000000',
-      permit_expires_at: 0,
-      kyt_score: 0,
-      daily_mint_cap: 0,
-      lifetime_mint_cap: 0,
-      travel_rule_required: true,
-    },
+    buildPlaceholderPermissionProfile(institutionIdHash),
     {
       nullifier_hash: nullifierHash,
       zkusd_amount: 0,
@@ -1301,17 +1318,7 @@ export async function revokeCompliancePermitOnDevnet(
   return sendAdminInstruction(config, (programId, protocolConfigPda, payer) => {
     const accounts = getPermissionedMintAccounts(
       programId,
-      {
-        institution_id_hash: institutionIdHash,
-        institution_label: '',
-        kyb_ref_hash: '0x0000000000000000000000000000000000000000000000000000000000000000',
-        travel_rule_ref_hash: '0x0000000000000000000000000000000000000000000000000000000000000000',
-        permit_expires_at: 0,
-        kyt_score: 0,
-        daily_mint_cap: 0,
-        lifetime_mint_cap: 0,
-        travel_rule_required: true,
-      },
+      buildPlaceholderPermissionProfile(institutionIdHash),
       {
         nullifier_hash: nullifierHash,
         zkusd_amount: 0,
@@ -1329,6 +1336,22 @@ export async function revokeCompliancePermitOnDevnet(
         { pubkey: accounts.compliancePermitPda, isSigner: false, isWritable: true },
       ],
       data: encodeRevokeCompliancePermitInstruction(institutionIdHash, nullifierHash),
+    });
+  });
+}
+
+export async function setProtocolPauseOnDevnet(
+  config: SolvusConfig,
+  paused: boolean,
+): Promise<string> {
+  return sendAdminInstruction(config, (programId, protocolConfigPda, payer) => {
+    return new TransactionInstruction({
+      programId,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: protocolConfigPda, isSigner: false, isWritable: true },
+      ],
+      data: encodeSetProtocolPauseInstruction(paused),
     });
   });
 }

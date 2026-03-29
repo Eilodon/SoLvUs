@@ -119,7 +119,7 @@ Avoid leading with:
 - `Phantom`
 - `badge`
 
-Those terms can stay in code if needed, but they should not define the submission story.
+Those terms have been removed from the shipped circuit and core interfaces, and they should not appear in the submission story.
 
 ## Shipped vs Roadmap
 ### Shipped now

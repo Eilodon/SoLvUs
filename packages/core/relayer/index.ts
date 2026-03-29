@@ -1,5 +1,5 @@
 import { secp256k1 } from '@noble/curves/secp256k1';
-import { BadgeType, Hex, RelayerResponse, RELAYER_SIG_EXPIRY } from '../contracts';
+import { CollateralProfile, Hex, RelayerResponse, RELAYER_SIG_EXPIRY } from '../contracts';
 import {
   bytes32BEToField,
   bytesToHex,
@@ -26,16 +26,21 @@ function computeOldestUtxoAgeInDays(utxos: Utxo[], now: number): number {
   return Math.floor((now - oldest) / 86400);
 }
 
-async function computeBtcData(indexer: BitcoinIndexer, btcAddress: string, badgeType: BadgeType, now: number): Promise<number> {
-  switch (badgeType) {
-    case BadgeType.Whale:
+async function computeBtcData(
+  indexer: BitcoinIndexer,
+  btcAddress: string,
+  collateralProfile: CollateralProfile,
+  now: number,
+): Promise<number> {
+  switch (collateralProfile) {
+    case CollateralProfile.Balance:
       return indexer.getBalance(btcAddress);
-    case BadgeType.Hodler:
+    case CollateralProfile.Vintage:
       return computeOldestUtxoAgeInDays(await indexer.getUtxos(btcAddress), now);
-    case BadgeType.Stacker:
+    case CollateralProfile.Distribution:
       return (await indexer.getUtxos(btcAddress)).length;
     default:
-      throw new Error(`Unsupported badge type: ${badgeType}`);
+      throw new Error(`Unsupported collateral profile: ${collateralProfile}`);
   }
 }
 
@@ -87,7 +92,7 @@ export async function fetchRelayerData(params: FetchRelayerDataParams): Promise<
     throw new Error(`Invalid or unconfirmed DLC Contract ID: ${params.dlcContractId}`);
   }
 
-  const btc_data = await computeBtcData(params.indexer, params.btcAddress, params.badgeType, now);
+  const btc_data = await computeBtcData(params.indexer, params.btcAddress, params.collateralProfile, now);
   if (btc_data <= 0) {
     throw new Error('No UTXOs found');
   }

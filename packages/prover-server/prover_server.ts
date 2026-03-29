@@ -7,15 +7,6 @@ import path from 'path';
 import { PublicKey } from '@solana/web3.js';
 import Redis from 'ioredis';
 
-const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
-const redis = new Redis(REDIS_URL, {
-  maxRetriesPerRequest: 3,
-  retryStrategy: (times) => Math.min(times * 50, 2000),
-});
-
-redis.on('error', (err) => console.error('Redis connection error:', err));
-redis.on('connect', () => console.log('Connected to Redis for idempotency cache'));
-
 const workspaceRoot = path.join(__dirname, '../..');
 const solvusEnv = process.env.SOLVUS_ENV || 'devnet';
 dotenv.config({
@@ -41,6 +32,7 @@ import {
   mintOnDevnet,
   prepareMintOnDevnet,
   revokeCompliancePermitOnDevnet,
+  setProtocolPauseOnDevnet,
   setInstitutionStatusOnDevnet,
 } from './devnet_mint';
 import {
@@ -57,9 +49,127 @@ const CACHE_TTL_SECONDS = Math.floor(RELAYER_SIG_EXPIRY / 1000);
 const DEFAULT_L1_REFUND_TIMELOCK_SECONDS = 7 * 24 * 60 * 60;
 const DEFAULT_PERMISSIONED_MINT_TTL_SECONDS = 15 * 60;
 const DEFAULT_INSTITUTION_LABEL = 'StableHacks Demo Treasury';
+const COMPLIANCE_API_KEY = process.env.COMPLIANCE_API_KEY || '';
+const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 
 app.use(cors());
 app.use(bodyParser.json({ limit: '1mb' }));
+
+type CacheBackendName = 'redis' | 'memory';
+
+interface CacheBackend {
+  get(key: string): Promise<string | null>;
+  set(key: string, value: string, ttlSeconds: number): Promise<void>;
+  getBackendName(): CacheBackendName;
+}
+
+function buildCache(): CacheBackend {
+  const memory = new Map<string, { value: string; expiresAt: number }>();
+  let backendName: CacheBackendName = 'memory';
+
+  const readMemory = async (key: string): Promise<string | null> => {
+    const cached = memory.get(key);
+    if (!cached) {
+      return null;
+    }
+    if (cached.expiresAt <= Date.now()) {
+      memory.delete(key);
+      return null;
+    }
+    return cached.value;
+  };
+
+  const writeMemory = async (key: string, value: string, ttlSeconds: number): Promise<void> => {
+    memory.set(key, {
+      value,
+      expiresAt: Date.now() + ttlSeconds * 1000,
+    });
+  };
+
+  try {
+    const redis = new Redis(REDIS_URL, {
+      maxRetriesPerRequest: 1,
+      retryStrategy: () => null,
+      lazyConnect: true,
+    });
+
+    redis.on('connect', () => {
+      backendName = 'redis';
+      console.log('Connected to Redis for idempotency cache');
+    });
+    redis.on('error', (err) => {
+      if (backendName !== 'memory') {
+        console.warn('[cache] Redis unavailable; falling back to in-memory cache');
+      }
+      backendName = 'memory';
+      console.warn('Redis connection error:', err.message);
+    });
+
+    void redis.connect().catch((err) => {
+      backendName = 'memory';
+      console.warn('[cache] Redis init failed; using in-memory cache');
+      console.warn('Redis connection error:', err.message);
+    });
+
+    return {
+      async get(key: string) {
+        if (backendName !== 'redis') {
+          return readMemory(key);
+        }
+        try {
+          return await redis.get(key);
+        } catch (error) {
+          backendName = 'memory';
+          return readMemory(key);
+        }
+      },
+      async set(key: string, value: string, ttlSeconds: number) {
+        if (backendName !== 'redis') {
+          return writeMemory(key, value, ttlSeconds);
+        }
+        try {
+          await redis.set(key, value, 'EX', ttlSeconds);
+        } catch (error) {
+          backendName = 'memory';
+          await writeMemory(key, value, ttlSeconds);
+        }
+      },
+      getBackendName() {
+        return backendName;
+      },
+    };
+  } catch (error) {
+    console.warn('[cache] Redis init failed; using in-memory cache');
+    return {
+      get: readMemory,
+      set: writeMemory,
+      getBackendName: () => 'memory',
+    };
+  }
+}
+
+const cache = buildCache();
+
+function requireApiKey(req: express.Request, res: express.Response, next: express.NextFunction): void {
+  if (!COMPLIANCE_API_KEY) {
+    res.status(503).json({
+      error: 'Compliance API key not configured',
+      message: 'Set COMPLIANCE_API_KEY before using protected compliance endpoints',
+    });
+    return;
+  }
+
+  const provided = req.header('x-api-key');
+  if (provided !== COMPLIANCE_API_KEY) {
+    res.status(401).json({
+      error: 'Unauthorized',
+      message: 'Valid x-api-key header required for compliance and devnet mint endpoints',
+    });
+    return;
+  }
+
+  next();
+}
 
 function resolveL1RefundTimelock(value: unknown): number {
   if (typeof value === 'number' && Number.isInteger(value) && value > Math.floor(Date.now() / 1000)) {
@@ -70,6 +180,15 @@ function resolveL1RefundTimelock(value: unknown): number {
 
 function hashReference(value: string): Hex {
   return `0x${createHash('sha256').update(value).digest('hex')}` as Hex;
+}
+
+function buildStructuredAuditHash(label: string, fields: Record<string, string | number | boolean>): Hex {
+  return hashReference(
+    JSON.stringify({
+      label,
+      ...fields,
+    }),
+  );
 }
 
 function readPositiveInteger(value: unknown, fallback: number): number {
@@ -104,12 +223,65 @@ function resolvePermissionProfile(
     typeof body?.travel_rule_reference === 'string' && body.travel_rule_reference.trim().length > 0
       ? body.travel_rule_reference.trim()
       : `TRAVEL:${institutionLabel}:${ownerScope}:${now}`;
+  const kybProviderLabel =
+    typeof body?.kyb_provider === 'string' && body.kyb_provider.trim().length > 0
+      ? body.kyb_provider.trim()
+      : 'solvus-devnet-kyb-gateway';
+  const travelRuleProviderLabel =
+    typeof body?.travel_rule_provider === 'string' && body.travel_rule_provider.trim().length > 0
+      ? body.travel_rule_provider.trim()
+      : 'solvus-devnet-travel-rule-gateway';
+  const originatorVaspLabel =
+    typeof body?.originator_vasp === 'string' && body.originator_vasp.trim().length > 0
+      ? body.originator_vasp.trim()
+      : `${institutionLabel} Treasury`;
+  const beneficiaryVaspLabel =
+    typeof body?.beneficiary_vasp === 'string' && body.beneficiary_vasp.trim().length > 0
+      ? body.beneficiary_vasp.trim()
+      : 'Solvus Issuance Desk';
+  const kybProviderRefHash = buildStructuredAuditHash('kyb_provider', {
+    provider: kybProviderLabel,
+  });
+  const travelRuleProviderRefHash = buildStructuredAuditHash('travel_rule_provider', {
+    provider: travelRuleProviderLabel,
+  });
+  const originatorVaspRefHash = buildStructuredAuditHash('originator_vasp', {
+    vasp: originatorVaspLabel,
+  });
+  const beneficiaryVaspRefHash = buildStructuredAuditHash('beneficiary_vasp', {
+    vasp: beneficiaryVaspLabel,
+  });
+  const kybRefHash = buildStructuredAuditHash('kyb_decision', {
+    provider: kybProviderLabel,
+    reference: kybReference,
+    owner_scope: ownerScope,
+    institution: institutionLabel,
+  });
+  const travelRuleDecisionRefHash = buildStructuredAuditHash('travel_rule_decision', {
+    provider: travelRuleProviderLabel,
+    reference: travelRuleReference,
+    originator_vasp: originatorVaspLabel,
+    beneficiary_vasp: beneficiaryVaspLabel,
+    owner_scope: ownerScope,
+  });
 
   return {
-    institution_id_hash: hashReference(`institution:${institutionLabel}:${ownerScope}`),
+    institution_id_hash: buildStructuredAuditHash('institution', {
+      institution: institutionLabel,
+      owner_scope: ownerScope,
+    }),
     institution_label: institutionLabel,
-    kyb_ref_hash: hashReference(kybReference),
-    travel_rule_ref_hash: hashReference(travelRuleReference),
+    kyb_ref_hash: kybRefHash,
+    travel_rule_ref_hash: travelRuleDecisionRefHash,
+    kyb_provider_ref_hash: kybProviderRefHash,
+    travel_rule_provider_ref_hash: travelRuleProviderRefHash,
+    travel_rule_decision_ref_hash: travelRuleDecisionRefHash,
+    originator_vasp_ref_hash: originatorVaspRefHash,
+    beneficiary_vasp_ref_hash: beneficiaryVaspRefHash,
+    kyb_provider_label: kybProviderLabel,
+    travel_rule_provider_label: travelRuleProviderLabel,
+    originator_vasp_label: originatorVaspLabel,
+    beneficiary_vasp_label: beneficiaryVaspLabel,
     permit_expires_at: now + permitTtlSeconds,
     kyt_score: readPositiveInteger(body?.kyt_score, 24),
     daily_mint_cap: dailyMintCap,
@@ -125,11 +297,12 @@ app.get('/health', (req, res) => {
     prover_backend: config.proverBackend,
     prover_adapter_mode: getGroth16AdapterMode(),
     devnet_mint_proof_mode: getDevnetMintProofMode(),
-    cache_backend: 'redis',
+    cache_backend: cache.getBackendName(),
     solvus_program_id: config.solvusProgramId || null,
     groth16_verifier_program_id: config.groth16VerifierProgramId || null,
     oracle_price_feed_id: config.oraclePriceFeedId || null,
     devnet_mint: getDevnetMintContext(config),
+    compliance_api_key_configured: COMPLIANCE_API_KEY.length > 0,
   });
 });
 
@@ -157,7 +330,7 @@ app.get('/compliance/state', async (req, res) => {
   }
 });
 
-app.post('/compliance/institution-status', async (req, res) => {
+app.post('/compliance/institution-status', requireApiKey, async (req, res) => {
   try {
     const institutionIdHash = req.body?.institution_id_hash;
     const status = req.body?.status;
@@ -185,7 +358,7 @@ app.post('/compliance/institution-status', async (req, res) => {
   }
 });
 
-app.post('/compliance/revoke-permit', async (req, res) => {
+app.post('/compliance/revoke-permit', requireApiKey, async (req, res) => {
   try {
     const institutionIdHash = req.body?.institution_id_hash;
     const nullifierHash = req.body?.nullifier_hash;
@@ -214,6 +387,23 @@ app.post('/compliance/revoke-permit', async (req, res) => {
   }
 });
 
+app.post('/protocol/pause', requireApiKey, async (req, res) => {
+  try {
+    const paused = Boolean(req.body?.paused);
+    const signature = await setProtocolPauseOnDevnet(config, paused);
+    res.json({
+      ok: true,
+      paused,
+      signature,
+    });
+  } catch (error: any) {
+    console.error('[protocol/pause]', error);
+    res.status(500).json({
+      error: error?.message || 'Failed to update protocol pause state',
+    });
+  }
+});
+
 app.post('/prove', async (req, res) => {
   req.setTimeout(45000);  // ADR-004: 45s < Solana tx timeout (~40s)
 
@@ -229,7 +419,7 @@ app.post('/prove', async (req, res) => {
       (req.header('X-Idempotency-Key') || stableJsonHash(proverInputs)).toLowerCase();
     
     // Check Redis cache for idempotency
-    const cached = await redis.get(`idempotency:${idempotencyKey}`);
+    const cached = await cache.get(`idempotency:${idempotencyKey}`);
     if (cached) {
       const parsed = JSON.parse(cached) as { expiresAt: number; response: ProofResponse };
       const now = Math.floor(Date.now() / 1000);
@@ -254,11 +444,10 @@ app.post('/prove', async (req, res) => {
 
     // Store in Redis with TTL
     const expiresAt = Math.floor(Date.now() / 1000) + CACHE_TTL_SECONDS;
-    await redis.set(
+    await cache.set(
       `idempotency:${idempotencyKey}`,
       JSON.stringify({ expiresAt, response }),
-      'EX',
-      CACHE_TTL_SECONDS
+      CACHE_TTL_SECONDS,
     );
 
     return res.json(response);
@@ -272,7 +461,7 @@ app.post('/prove', async (req, res) => {
   }
 });
 
-app.post('/mint-devnet', async (req, res) => {
+app.post('/mint-devnet', requireApiKey, async (req, res) => {
   req.setTimeout(45000);  // ADR-004: 45s < Solana tx timeout
 
   try {
@@ -316,7 +505,7 @@ app.post('/mint-devnet', async (req, res) => {
   }
 });
 
-app.post('/prepare-devnet-mint', async (req, res) => {
+app.post('/prepare-devnet-mint', requireApiKey, async (req, res) => {
   req.setTimeout(45000);  // ADR-004: 45s < Solana tx timeout
 
   try {

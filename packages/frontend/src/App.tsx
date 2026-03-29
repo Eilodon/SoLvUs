@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Connection, PublicKey, Transaction } from '@solana/web3.js'
 
 const PROVER_SERVER_URL = import.meta.env.VITE_PROVER_SERVER_URL || 'http://localhost:3001'
+const COMPLIANCE_API_KEY = import.meta.env.VITE_COMPLIANCE_API_KEY || ''
 const DEFAULT_DEVNET_CLUSTER = 'https://api.devnet.solana.com'
 
 const SAMPLE_PROVER_INPUTS = {
@@ -15,7 +16,7 @@ const SAMPLE_PROVER_INPUTS = {
   dlc_contract_id: '0x0000000000000000000000000000000000000000000000000000000000000001',
   relayer_pubkey_x: '0x466d7fcae563e5cb09a0d1870bb580344804617879a14949cf22285f1bae3f27',
   relayer_pubkey_y: '0x6728176c3c6431f8eeda4538dc37c865e2784f3a9e77d044f33e407797e1278a',
-  badge_type: 1,
+  collateral_profile: 1,
   threshold: 100000000,
   is_upper_bound: false,
   nullifier_hash: '0x1d2d0ca2a3df433de3c2c294ec46b4cef6e9c6d37af62799469e9739675f8d3d',
@@ -34,6 +35,7 @@ interface HealthResponse {
     zkusdMintAddress?: string
     zkusdMintDecimals?: number
   }
+  compliance_api_key_configured?: boolean
   [key: string]: unknown
 }
 
@@ -73,6 +75,16 @@ async function sha256Hex(input: string): Promise<string> {
 
 function decodeBase64(base64: string): Uint8Array {
   return Uint8Array.from(atob(base64), (char) => char.charCodeAt(0))
+}
+
+function buildApiHeaders(includeApiKey = false): HeadersInit {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  }
+  if (includeApiKey && COMPLIANCE_API_KEY) {
+    headers['x-api-key'] = COMPLIANCE_API_KEY
+  }
+  return headers
 }
 
 function App() {
@@ -159,9 +171,7 @@ function App() {
 
     const res = await fetch(`${PROVER_SERVER_URL}${path}`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: buildApiHeaders(true),
       body: JSON.stringify(payload),
     })
     const body = await res.json()
@@ -212,9 +222,7 @@ function App() {
       const parsed = JSON.parse(payload)
       const res = await fetch(`${PROVER_SERVER_URL}/mint-devnet`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: buildApiHeaders(true),
         body: JSON.stringify({
           prover_inputs: parsed.prover_inputs,
           zkusd_amount: Number(zkusdAmount),
@@ -251,9 +259,7 @@ function App() {
 
       const prepareRes = await fetch(`${PROVER_SERVER_URL}/prepare-devnet-mint`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: buildApiHeaders(true),
         body: JSON.stringify({
           owner_pubkey: ownerPubkey,
           zkusd_amount: Number(zkusdAmount),
@@ -364,6 +370,34 @@ function App() {
     }
   }
 
+  const pauseProtocol = async () => {
+    setStatus('loading')
+    setError('')
+    try {
+      await mutateComplianceState('/protocol/pause', { paused: true })
+      setStatus('done')
+      await refreshHealth()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown protocol pause error'
+      setError(message)
+      setStatus('error')
+    }
+  }
+
+  const resumeProtocol = async () => {
+    setStatus('loading')
+    setError('')
+    try {
+      await mutateComplianceState('/protocol/pause', { paused: false })
+      setStatus('done')
+      await refreshHealth()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown protocol resume error'
+      setError(message)
+      setStatus('error')
+    }
+  }
+
   const refreshAuditDashboard = async () => {
     setStatus('loading')
     setError('')
@@ -410,12 +444,18 @@ function App() {
                 <span className="font-mono text-sky-300">{health ? 'online' : 'pending'}</span>
               </div>
               <div className="flex items-center justify-between gap-8">
+                <span>Compliance Auth</span>
+                <span className="font-mono text-amber-200">
+                  {health?.compliance_api_key_configured ? 'api-key required' : 'missing'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-8">
                 <span>Solvus Program</span>
                 <span className="font-mono text-cyan-200">{String(health?.solvus_program_id || 'unknown')}</span>
               </div>
               <div className="flex items-center justify-between gap-8">
                 <span>Wallet</span>
-                <span className="font-mono text-fuchsia-200">{walletAddress || 'phantom disconnected'}</span>
+                <span className="font-mono text-fuchsia-200">{walletAddress || 'browser wallet disconnected'}</span>
               </div>
             </div>
           </div>
@@ -457,7 +497,7 @@ function App() {
                   disabled={status === 'loading'}
                   className="rounded-full border border-fuchsia-300/40 bg-fuchsia-300/10 px-5 py-2 text-sm font-bold text-fuchsia-100 transition hover:bg-fuchsia-300/20 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  Connect Phantom
+                  Connect Browser Wallet
                 </button>
                 <button
                   onClick={submitProof}
@@ -470,7 +510,7 @@ function App() {
             </div>
 
             <p className="mt-4 text-sm leading-6 text-stone-400">
-              `CLI Mint On Devnet` dùng ví admin/compliance cục bộ. `Mint With Phantom` sẽ để server cấp institution policy + permit trước, rồi Phantom ký với vai trò operator wallet.
+              `CLI Mint On Devnet` dùng ví admin/compliance cục bộ. `Mint With Browser Wallet` dùng browser wallet để demo operator flow; production path có thể thay bước ký này bằng MPC hoặc HSM-backed custody.
             </p>
 
             <div className="mt-5 grid gap-3 rounded-[1.5rem] border border-stone-800 bg-stone-950/60 p-4 lg:grid-cols-[auto_auto_1fr] lg:items-center">
@@ -495,11 +535,11 @@ function App() {
                   disabled={status === 'loading'}
                   className="rounded-full bg-fuchsia-300 px-5 py-2 text-sm font-bold text-stone-950 transition hover:bg-fuchsia-200 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  Mint With Phantom
+                  Mint With Browser Wallet
                 </button>
               </div>
               <p className="text-xs leading-6 text-stone-500">
-                Server vẫn là fee payer và compliance admin. Phantom chỉ ký operator wallet nên user không phải nạp devnet SOL để test policy-gated flow.
+                Server vẫn là fee payer và compliance admin. Browser wallet chỉ ký operator leg nên user không phải nạp devnet SOL để test policy-gated flow.
               </p>
             </div>
 
@@ -603,6 +643,20 @@ function App() {
                   className="rounded-full bg-amber-300 px-4 py-2 text-xs font-bold text-stone-950 transition hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Revoke Permit
+                </button>
+                <button
+                  onClick={pauseProtocol}
+                  disabled={status === 'loading' || !complianceContext}
+                  className="rounded-full bg-violet-300 px-4 py-2 text-xs font-bold text-stone-950 transition hover:bg-violet-200 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Pause Protocol
+                </button>
+                <button
+                  onClick={resumeProtocol}
+                  disabled={status === 'loading' || !complianceContext}
+                  className="rounded-full bg-sky-300 px-4 py-2 text-xs font-bold text-stone-950 transition hover:bg-sky-200 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Resume Protocol
                 </button>
               </div>
               <pre className="mt-4 min-h-[14rem] overflow-auto rounded-[1.25rem] bg-stone-950/80 p-4 text-xs leading-6 text-stone-200">

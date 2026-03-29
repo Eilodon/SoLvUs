@@ -10,15 +10,15 @@ Verified on 2026-03-29.
 - Fee payer / upgrade authority: `5VhvNSyQtpr4HTnXwruFjfUPpSm4hjNs62bpa2VAo551`
 
 ## Verified Transactions
-- Real verifier upgrade: `5S3phU8J1wpSh4MV8Ns7S6BqJQnzemA1mGjUbDQNBcic99Gs4enBvSJVnA7G6Lcn7zashWGn2uXMivjfvLF8dzgQ`
-- Previous `solvus` upgrade: `5NXvkiQ3eDicb1DZccx3npJf6AgsiTTTWYhnUNubB6PrNheosAvuoqdNdWrpmHaEXia8LEzSL2TTbSbUmKcQgfkC`
-- Latest `solvus` upgrade with institutional controls: `sZwWuSoLuWqBS71MVwaHmH41ZGXfwa8U1kVgeoHXgCwBXRaWsCH9gUcFUZKCJ2SREqzLhs9of9eubaqCfA7WKus`
-- `update_protocol_config`: `2pqY1tVoUiyLxQQnbeLd4zR6xkkA34AYjvtk117eLb6rADHCBNe28jr4Ts8E8QwHqD4Mq6dYxkxRsBJZqLtTzutA`
-- Real proof `mint_zkusd` smoke test: `WqAxERPe3Qmtuzyqnak7TPimTaVQTvgvPQ4P5E1vBp3to4NB3uyeW7xERtVZqdhwig9E5xdad3CvKaDnzF3PzqR`
-- Institutional suspend action: `23qzYwKKnk55UUiM8nLAwrPMoU2L7oNh5XKN17yG754S4wxPk3Y9qhngD3cPDrikzKCEVbzR5tgD3Dg3esXQYwLK`
-- Institutional reactivate action: `3azmjkFPRAT1Mq6iqihuRsryA1nzC5PQBAM7W91zrihGh8yWF1KNqEabTNVMRTvixjsWJqk7yNeu9zUZi55XAKdE`
-- Permit revoke action: `2tBTMzc7K53VqRi28JSujudzX1AJ1eAP62iq8XpX9XCLBz8N2vFWMitqL14NpZ5nShVThawPgWV14rZcdu2PeSD7`
-- Institutional live mint submit: `4dgpGjPbZ2kZPHyP2BKgQUuJoHPKLYE9wpyfEMJQaxqnwmVXhjkYuJuwf34bndwuUHBnpNPFwYUkPCxVfHWnRyBp`
+- Latest verifier upgrade: `3U9bQqSvhh4CGSrBnCR3nxVmM5Uc6GVaeWW2GfWuZqPyUCmR3Qc91cDDTzgz9ziLAscG9c6PhdFfhdNtZmcUDX2m`
+- Latest `solvus` upgrade with role split and protocol pause: `32naiyGExwV2DfEwkFS1fEnaMEC4ai9ahg9VUgdxCkL8hhz4DY8towLiFyF53Sw3FnTSU3GsmFrAnGnZ9Dh5FiDP`
+- `update_protocol_config` after role split migration: `6yMV3ezbCGeT32m8AxPcv23CWXHkkDyTwZoHJxNoF8KCf5dVfHD1aXjvhNGFibjSNMc6ExXEx5VF8gFifTNLuKU`
+- Institutional suspend action: `5gP5cnJV9wetPhFMua1q9z3k6QKc7VswaSDykUUsbobHhmF3Ug4EJd649U5CY9L1ZqizBuCQieBLZA5ybdMxQx4W`
+- Institutional reactivate action: `3vzDcGLPJwdE5CTgpYYTdD3mHdjjcUszduRDAgPHSzU7P7f5u6PfCghYEh5vvqyT1tL3AynnSo3RuEA6Q1EURihf`
+- Permit revoke action: `3h8sSHQKczg3ZYbm3TLoiT7qEEVqG4z2mJc5HVTMLNL7kB573C873NDNdYoBqxR5aXPG7Eq2jGDanrw8d4tcTUV3`
+- Protocol pause action: `5PYJWuASfFkr1biY7DjxEWhPEECajbpHXcwE63D1xgWxM25bA5MCVuNV1fJuMmZrT8DhGxX4VamP2Go2CQLrgWxr`
+- Protocol resume action: `gNXM794dvPcFyfjTkx2hVzx46wwFrsXkzDd71Kmydudhy2jws54p8Utc5eNLkrLRKKjdmoEBx3dk1dF5fHwD9rJ`
+- Institutional live mint submit: `2snPKSZgA2VPqQiseS569LHnk8reFUv1TH5Pyx77A6QMYSqGNzKzkJpQvW8D7sZ9wzAeuPpZBJuuNPJpnQjQM5V9`
 
 ## Preconditions
 - Solana CLI and SBF toolchain installed
@@ -26,6 +26,10 @@ Verified on 2026-03-29.
 - Sunspot installed
 - Devnet wallet funded
 - `config/devnet.env` populated with the active IDs above
+- `COMPLIANCE_API_KEY` exported for protected devnet mint and compliance endpoints
+- `ORACLE_MAX_STALENESS_SECONDS` optional override for `init-protocol-config` if the demo needs a stricter oracle freshness window
+- `COLLATERAL_RATIO_BPS` optional override for `init-protocol-config` if the demo needs a non-default collateral requirement
+- Redis optional: if unavailable, the prover server falls back to an in-memory cache and reports `cache_backend=memory` in `/health`
 
 ## Build Real Verifier
 ```bash
@@ -71,17 +75,25 @@ The prover server endpoints are:
 - `GET /compliance/state`
 - `POST /compliance/institution-status`
 - `POST /compliance/revoke-permit`
+- `POST /protocol/pause`
 
 For local bring-up:
 ```bash
-PROVER_PORT=3901 npm run server
+COMPLIANCE_API_KEY=solvus-devnet-compliance-key \
+PROVER_PORT=3901 \
+npm run server
 ```
 
 If port `3001` is already occupied by another local project, point the frontend and smoke script at the dedicated port:
 
 ```bash
-VITE_PROVER_SERVER_URL=http://127.0.0.1:3901 npm run dev --workspace=@solvus/frontend
-PROVER_SERVER_URL=http://127.0.0.1:3901 npm run stablehacks:smoke
+VITE_PROVER_SERVER_URL=http://127.0.0.1:3901 \
+VITE_COMPLIANCE_API_KEY=solvus-devnet-compliance-key \
+npm run dev --workspace=@solvus/frontend
+
+PROVER_SERVER_URL=http://127.0.0.1:3901 \
+COMPLIANCE_API_KEY=solvus-devnet-compliance-key \
+npm run stablehacks:smoke
 ```
 
 ## StableHacks Dress Rehearsal
@@ -93,6 +105,8 @@ The institutional rehearsal now covers two paths:
    - suspend the institution
    - reactivate the institution
    - revoke the permit
+   - pause the protocol
+   - resume the protocol
 2. Live mint rehearsal:
    - prepare a fresh institutional mint for the operator wallet
    - submit the partially signed transaction
@@ -107,7 +121,7 @@ PROVER_SERVER_URL=http://127.0.0.1:3901 npm run stablehacks:smoke
 ## Operational Note: Compute Budget
 Real verifier CPI is materially more expensive than the old scaffold path. A default Solana transaction budget of `200_000` CUs is not enough for `mint_zkusd`, and `400_000` CUs was also insufficient during verification on 2026-03-21.
 
-The mint transaction must request a higher budget before the `mint_zkusd` instruction. The current repo uses `800_000` CUs in `packages/prover-server/devnet_mint.ts`.
+The mint transaction must request a higher budget before the `mint_zkusd` instruction. The current repo uses `1_400_000` CUs in `packages/prover-server/devnet_mint.ts`.
 
 If a client bypasses that path and builds the instruction manually, it must prepend:
 - `ComputeBudgetProgram.setComputeUnitLimit({ units: 800_000 })`

@@ -61,7 +61,7 @@ FieldName :: Field                      — BN254 field element
 | `DLC_CLOSE_TIMEOUT` | `u64` | `3600` | 1 hour in seconds. Max time for Relayer to close DLC after BurnZkUSD event. 3 retries within window. (ADR-024) |
 | `GRACE_PERIOD_DURATION` | `u64` | `3600` | 1 hour in seconds. Duration of liquidation grace period (ADR-016, ADR-028). Always enabled in Phase 1 — no flag. |
 | `L1_PREEMPTION_WINDOW` | `i64` | `86400` | 24 hours in seconds. Window before L1 refund timelock when liquidation is allowed. (ADR-041) |
-| `MAX_MINT_ZKUSD_AMOUNT` | `u64` | `1_000_000_000` | Maximum zkUSD amount that can be minted in a single transaction. |
+| `MAX_MINT_ZKUSD_AMOUNT` | `u64` | `1_000_000_000_000` | Maximum zkUSD amount that can be minted in a single transaction. zkUSD uses 6 decimals, so this equals 1,000,000 zkUSD. |
 | `MAX_LIQUIDATOR_REWARD_BPS` | `u64` | `1000` | 10% in basis points. Maximum liquidator reward as percentage of seized collateral. |
 | `PYTH_STALENESS_SECONDS` | `i64` | `60` | 60 seconds. Maximum age of Pyth oracle price before considered stale. (ADR-040) |
 | `WHALE_THRESHOLD` | `u64` | `100_000_000` | 1 BTC in satoshis. Minimum BTC balance to qualify for Whale badge. INV-13. (ADR-027) |

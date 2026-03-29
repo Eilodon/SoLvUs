@@ -20,14 +20,14 @@ export const AT_RISK_THRESHOLD = 13000;
 export const CIRCUIT_BREAKER_TIMEOUT = 259200;
 export const DLC_CLOSE_TIMEOUT = 3600;
 export const GRACE_PERIOD_DURATION = 3600;
-export const WHALE_THRESHOLD = 100_000_000;
-export const HODLER_THRESHOLD = 365;
-export const STACKER_THRESHOLD = 10;
+export const BALANCE_PROFILE_THRESHOLD = 100_000_000;
+export const VINTAGE_PROFILE_THRESHOLD = 365;
+export const DISTRIBUTION_PROFILE_THRESHOLD = 10;
 
-export enum BadgeType {
-  Whale = 1,
-  Hodler = 2,
-  Stacker = 3,
+export enum CollateralProfile {
+  Balance = 1,
+  Vintage = 2,
+  Distribution = 3,
 }
 
 export enum TransactionStatus {
@@ -58,7 +58,7 @@ export interface ProverInputs {
   solana_address: Hex;
   relayer_pubkey_x: Hex;
   relayer_pubkey_y: Hex;
-  badge_type: BadgeType;
+  collateral_profile: CollateralProfile;
   threshold: number;
   is_upper_bound: boolean;
   nullifier_hash: Hex;
@@ -103,12 +103,16 @@ export interface VaultState {
 }
 
 export interface ProtocolConfig {
-  admin: Hex;
+  protocol_admin: Hex;
+  compliance_admin: Hex;
   groth16_verifier_program_id: string;
   oracle_price_feed_id: string;
   liquidation_program_id?: string;
   authorized_relayer_pubkey_x: Hex;
   authorized_relayer_pubkey_y: Hex;
+  collateral_ratio_bps: number;
+  oracle_max_staleness_seconds: number;
+  protocol_paused: boolean;
   updated_at: number;
 }
 
@@ -117,6 +121,15 @@ export interface InstitutionPermissionProfile {
   institution_label: string;
   kyb_ref_hash: Hex;
   travel_rule_ref_hash: Hex;
+  kyb_provider_ref_hash: Hex;
+  travel_rule_provider_ref_hash: Hex;
+  travel_rule_decision_ref_hash: Hex;
+  originator_vasp_ref_hash: Hex;
+  beneficiary_vasp_ref_hash: Hex;
+  kyb_provider_label: string;
+  travel_rule_provider_label: string;
+  originator_vasp_label: string;
+  beneficiary_vasp_label: string;
   permit_expires_at: number;
   kyt_score: number;
   daily_mint_cap: number;
@@ -139,21 +152,25 @@ export interface ErrorPayload {
   trace?: string;
 }
 
-export function assertBadgeType(value: number): asserts value is BadgeType {
-  if (value !== BadgeType.Whale && value !== BadgeType.Hodler && value !== BadgeType.Stacker) {
-    throw new Error(`Invalid badge type: ${value}`);
+export function assertCollateralProfile(value: number): asserts value is CollateralProfile {
+  if (
+    value !== CollateralProfile.Balance &&
+    value !== CollateralProfile.Vintage &&
+    value !== CollateralProfile.Distribution
+  ) {
+    throw new Error(`Invalid collateral profile: ${value}`);
   }
 }
 
-export function getThresholdForBadge(badgeType: BadgeType): number {
-  switch (badgeType) {
-    case BadgeType.Whale:
-      return WHALE_THRESHOLD;
-    case BadgeType.Hodler:
-      return HODLER_THRESHOLD;
-    case BadgeType.Stacker:
-      return STACKER_THRESHOLD;
+export function getThresholdForCollateralProfile(collateralProfile: CollateralProfile): number {
+  switch (collateralProfile) {
+    case CollateralProfile.Balance:
+      return BALANCE_PROFILE_THRESHOLD;
+    case CollateralProfile.Vintage:
+      return VINTAGE_PROFILE_THRESHOLD;
+    case CollateralProfile.Distribution:
+      return DISTRIBUTION_PROFILE_THRESHOLD;
     default:
-      throw new Error(`Unsupported badge type: ${badgeType}`);
+      throw new Error(`Unsupported collateral profile: ${collateralProfile}`);
   }
 }
