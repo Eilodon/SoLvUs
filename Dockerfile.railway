@@ -1,41 +1,50 @@
-FROM node:20-alpine AS base
-RUN apk add --no-cache curl nginx
-ENV NODE_ENV=production
+# Stage 1: Build frontend only (smaller footprint)
+FROM node:20-alpine AS builder
+WORKDIR /app
+
+# Copy only frontend package files
+COPY packages/frontend/package.json packages/frontend/
+COPY packages/core/package.json packages/core/
+COPY package.json package-lock.json* ./
+
+# Install deps and build
+RUN npm ci --workspace=@solvus/frontend --workspace=@solvus/core && \
+    npm run build --workspace=@solvus/frontend
+
+# Stage 2: Runtime - minimal footprint
+FROM node:20-alpine AS runtime
+RUN apk add --no-cache nginx
 
 WORKDIR /app
 
-# Copy package files
+# Copy only production dependencies for prover-server
+COPY packages/prover-server/package.json packages/prover-server/
 COPY package.json package-lock.json* ./
 COPY packages/core/package.json packages/core/
-COPY packages/prover-server/package.json packages/prover-server/
-COPY packages/frontend/package.json packages/frontend/
 
-# Install all dependencies
-RUN npm ci
+# Install only runtime deps (no dev)
+RUN npm ci --omit=dev --workspace=@solvus/prover-server --workspace=@solvus/core
 
-# Copy source code
-COPY packages/ packages/
+# Copy built frontend
+COPY --from=builder /app/packages/frontend/dist /var/www/localhost
+
+# Copy startup script
+COPY startup.sh /app/startup.sh
+RUN chmod +x /app/startup.sh
+
+# Copy config
 COPY config/ config/
-COPY tsconfig.json .
-
-# Build frontend
-RUN npm run build --workspace=@solvus/frontend
 
 # Create non-root user
 RUN addgroup -g 1001 -S solvus && \
-    adduser -S solvus -u 1001
-
-# Expose ports (frontend nginx + backend)
-EXPOSE 3001 80
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:3001/health || exit 1
+    adduser -S solvus -u 1001 && \
+    chown -R solvus:solvus /app /var/www/localhost
 
 USER solvus
 
-# Start both frontend (nginx) and backend
-COPY startup.sh /app/startup.sh
-RUN chmod +x /app/startup.sh
+EXPOSE 80 3001
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:3001/health || exit 1
 
 CMD ["/app/startup.sh"]
