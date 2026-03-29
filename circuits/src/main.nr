@@ -1,5 +1,6 @@
+mod fixed_sha256;
+
 use dep::legacy_poseidon;
-use dep::sha256;
 use std::ecdsa_secp256k1::verify_signature;
 
 fn split_to_128bit_fields(bytes: [u8; 32]) -> (Field, Field) {
@@ -23,14 +24,6 @@ fn bytes_to_hex64(bytes: [u8; 32]) -> [u8; 64] {
         hex[i * 2 + 1] = if lo < 10 { lo + 48 } else { lo + 87 };
     }
     hex
-}
-
-fn bytes32_to_field(bytes: [u8; 32]) -> Field {
-    let mut acc = 0;
-    for i in 0..32 {
-        acc = acc * 256 + bytes[i] as Field;
-    }
-    acc
 }
 
 fn main(
@@ -72,7 +65,7 @@ fn main(
     for i in 0..64 { full_message[26 + i] = address_hex[i]; }
     for i in 0..64 { full_message[90 + i] = dlc_hex[i]; }
 
-    let user_message_hash = sha256::digest(sha256::digest(full_message));
+    let user_message_hash = fixed_sha256::double_sha256_154(full_message);
     assert(verify_signature(pubkey_x, pubkey_y, user_sig, user_message_hash));
 
     let (x_hi, x_lo) = split_to_128bit_fields(pubkey_x);

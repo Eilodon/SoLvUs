@@ -1,6 +1,7 @@
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { BadgeType, Hex, RelayerResponse, RELAYER_SIG_EXPIRY } from '../contracts';
 import {
+  bytes32BEToField,
   bytesToHex,
   fieldToBytes32BE,
   hexToBytes,
@@ -45,7 +46,7 @@ export async function computeRelayerCommitment(
 ): Promise<Hex> {
   validateBytesLength(userPubkeyX, 32, 'user_pubkey_x');
   const [x_hi, x_lo] = splitBytes32To128BitFields(userPubkeyX);
-  const dlcBigInt = BigInt('0x' + dlcContractId);
+  const dlcBigInt = bytes32BEToField(dlcContractId);
   const commitment = await poseidonHash([x_hi, x_lo, BigInt(btcData), dlcBigInt]);
   return bytesToHex(fieldToBytes32BE(commitment));
 }

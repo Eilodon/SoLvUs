@@ -2,26 +2,39 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::Instruction;
 use anchor_lang::solana_program::program::invoke;
 use anchor_lang::solana_program::pubkey;
+use anchor_lang::system_program::{self, CreateAccount};
 use anchor_spl::token::{self, Burn, Mint, MintTo, Token, TokenAccount};
-use pyth_sdk_solana::{load_price_feed_from_account_info, PriceFeed, PriceStatus};
+use pythnet_sdk::messages::PriceFeedMessage;
+
+#[allow(dead_code)]
+#[path = "../../../verifier_contract.rs"]
+mod verifier_contract;
 
 declare_id!("Cik3PiifeUrKrWcAFsHM5R7ckQVkWAc9M9THrXVfanVR");
 
 const ZKUSD_MINT_AUTHORITY_SEED: &[u8] = b"zkusd_mint_authority";
 const PDA_NULLIFIER_SEED: &[u8] = b"nullifier_account";
+const VERIFICATION_PAYLOAD_SEED: &[u8] = b"verification_payload";
 const PROTOCOL_CONFIG_SEED: &[u8] = b"protocol_config";
+const INSTITUTION_ACCOUNT_SEED: &[u8] = b"institution_account";
+const COMPLIANCE_PERMIT_SEED: &[u8] = b"compliance_permit";
 const VAULT_SEED: &[u8] = b"vault";
 const DLC_CLOSE_TIMEOUT: i64 = 3600;
 const GRACE_PERIOD_DURATION: i64 = 3600;
 const L1_PREEMPTION_WINDOW: i64 = 86400;
+const INSTITUTION_MINT_WINDOW_SECONDS: i64 = 86400;
 const MAX_MINT_ZKUSD_AMOUNT: u64 = 1_000_000_000;
 const MAX_LIQUIDATOR_REWARD_BPS: u64 = 1000;
 const SPL_TOKEN_PROGRAM_ID: Pubkey = pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+const PYTH_RECEIVER_PROGRAM_ID: Pubkey = pubkey!("rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ");
 const GROTH16_PUBLIC_INPUT_FIELD_COUNT: usize = 69;
 const GROTH16_PUBLIC_INPUT_HEADER_BYTES: usize = 12;
-const GROTH16_PUBLIC_INPUT_BYTES: usize =
-    GROTH16_PUBLIC_INPUT_HEADER_BYTES + GROTH16_PUBLIC_INPUT_FIELD_COUNT * 32;
+const GROTH16_PUBLIC_INPUT_BYTES: usize = verifier_contract::GROTH16_PUBLIC_INPUT_BYTES;
+const _: [(); GROTH16_PUBLIC_INPUT_BYTES] =
+    [(); GROTH16_PUBLIC_INPUT_HEADER_BYTES + GROTH16_PUBLIC_INPUT_FIELD_COUNT * 32];
 const PYTH_STALENESS_SECONDS: i64 = 60;
+const VAULT_ACCOUNT_MIN_SPACE: usize = 8 + VaultState::MIN_LEN;
+const BTC_USD_FEED_ID: &str = "0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43";
 
 #[program]
 pub mod solvus {
@@ -75,11 +88,6 @@ pub mod solvus {
         authorized_relayer_pubkey_x: [u8; 32],
         authorized_relayer_pubkey_y: [u8; 32],
     ) -> Result<()> {
-        require_keys_eq!(
-            ctx.accounts.protocol_config.admin,
-            ctx.accounts.admin.key(),
-            SolvusError::Unauthorized
-        );
         require!(
             groth16_verifier_program_id != Pubkey::default(),
             SolvusError::VerifierProgramNotConfigured
@@ -89,14 +97,39 @@ pub mod solvus {
             SolvusError::OraclePriceFeedNotConfigured
         );
 
+        let protocol_config_info = &ctx.accounts.protocol_config;
+        require_keys_eq!(
+            *protocol_config_info.owner,
+            crate::ID,
+            SolvusError::InvalidProtocolConfig
+        );
+        let legacy_len = 8 + LegacyProtocolConfigV1::LEN;
+        let current_len = 8 + ProtocolConfig::LEN;
+        let data_len = protocol_config_info.data_len();
+        require!(
+            data_len == legacy_len || data_len == current_len,
+            SolvusError::InvalidProtocolConfig
+        );
+
+        let admin = load_protocol_config_admin(protocol_config_info)?;
+        require_keys_eq!(admin, ctx.accounts.admin.key(), SolvusError::Unauthorized);
+
         let now = Clock::get()?.unix_timestamp;
-        let protocol_config = &mut ctx.accounts.protocol_config;
-        protocol_config.groth16_verifier_program_id = groth16_verifier_program_id;
-        protocol_config.oracle_price_feed_id = oracle_price_feed_id;
-        protocol_config.liquidation_program_id = liquidation_program_id;
-        protocol_config.authorized_relayer_pubkey_x = authorized_relayer_pubkey_x;
-        protocol_config.authorized_relayer_pubkey_y = authorized_relayer_pubkey_y;
-        protocol_config.updated_at = now;
+        if data_len == legacy_len {
+            protocol_config_info.resize(current_len)?;
+        }
+        store_protocol_config(
+            protocol_config_info,
+            &ProtocolConfig {
+                admin,
+                groth16_verifier_program_id,
+                oracle_price_feed_id,
+                liquidation_program_id,
+                authorized_relayer_pubkey_x,
+                authorized_relayer_pubkey_y,
+                updated_at: now,
+            },
+        )?;
 
         emit!(ProtocolConfigUpdatedEvent {
             admin: ctx.accounts.admin.key(),
@@ -111,33 +144,244 @@ pub mod solvus {
         Ok(())
     }
 
+    pub fn upsert_institution(
+        ctx: Context<UpsertInstitution>,
+        institution_id_hash: [u8; 32],
+        approved_operator: Pubkey,
+        risk_tier: u8,
+        daily_mint_cap: u64,
+        lifetime_mint_cap: u64,
+        kyb_ref_hash: [u8; 32],
+        travel_rule_required: bool,
+    ) -> Result<()> {
+        require_keys_eq!(
+            ctx.accounts.protocol_config.admin,
+            ctx.accounts.admin.key(),
+            SolvusError::Unauthorized
+        );
+        require!(
+            approved_operator != Pubkey::default(),
+            SolvusError::InvalidInstitutionAccount
+        );
+        require!(daily_mint_cap > 0, SolvusError::InstitutionMintCapExceeded);
+        require!(
+            lifetime_mint_cap >= daily_mint_cap,
+            SolvusError::InstitutionMintCapExceeded
+        );
+
+        let now = Clock::get()?.unix_timestamp;
+        let institution = &mut ctx.accounts.institution_account;
+        if institution.current_period_start == 0 {
+            institution.current_period_start = now;
+        }
+
+        institution.institution_id_hash = institution_id_hash;
+        institution.approved_operator = approved_operator;
+        institution.status = InstitutionStatus::Active as u8;
+        institution.risk_tier = risk_tier;
+        institution.daily_mint_cap = daily_mint_cap;
+        institution.lifetime_mint_cap = lifetime_mint_cap;
+        institution.kyb_ref_hash = kyb_ref_hash;
+        institution.travel_rule_required = travel_rule_required;
+        institution.updated_at = now;
+
+        emit!(InstitutionUpsertedEvent {
+            institution_id_hash,
+            approved_operator,
+            risk_tier,
+            daily_mint_cap,
+            lifetime_mint_cap,
+            kyb_ref_hash,
+            travel_rule_required,
+            timestamp: now,
+        });
+
+        Ok(())
+    }
+
+    pub fn issue_compliance_permit(
+        ctx: Context<IssueCompliancePermit>,
+        institution_id_hash: [u8; 32],
+        nullifier_hash: [u8; 32],
+        max_amount: u64,
+        expires_at: i64,
+        kyt_score: u16,
+        travel_rule_ref_hash: [u8; 32],
+    ) -> Result<()> {
+        require_keys_eq!(
+            ctx.accounts.protocol_config.admin,
+            ctx.accounts.admin.key(),
+            SolvusError::Unauthorized
+        );
+        require!(max_amount > 0, SolvusError::InvalidAmount);
+
+        let now = Clock::get()?.unix_timestamp;
+        require!(expires_at > now, SolvusError::CompliancePermitExpired);
+
+        let institution = &ctx.accounts.institution_account;
+        require!(
+            institution.status == InstitutionStatus::Active as u8,
+            SolvusError::InstitutionInactive
+        );
+        require!(
+            institution.institution_id_hash == institution_id_hash,
+            SolvusError::InvalidInstitutionAccount
+        );
+        if institution.travel_rule_required {
+            require!(
+                travel_rule_ref_hash != [0u8; 32],
+                SolvusError::TravelRuleRequired
+            );
+        }
+
+        let permit = &mut ctx.accounts.compliance_permit;
+        permit.institution_id_hash = institution_id_hash;
+        permit.operator = institution.approved_operator;
+        permit.nullifier_hash = nullifier_hash;
+        permit.max_amount = max_amount;
+        permit.expires_at = expires_at;
+        permit.kyt_score = kyt_score;
+        permit.kyb_ref_hash = institution.kyb_ref_hash;
+        permit.travel_rule_ref_hash = travel_rule_ref_hash;
+        permit.issued_by = ctx.accounts.admin.key();
+        permit.issued_at = now;
+        permit.used_at = 0;
+
+        emit!(CompliancePermitIssuedEvent {
+            institution_id_hash,
+            operator: institution.approved_operator,
+            nullifier_hash,
+            max_amount,
+            expires_at,
+            kyt_score,
+            travel_rule_ref_hash,
+            timestamp: now,
+        });
+
+        Ok(())
+    }
+
+    pub fn set_institution_status(
+        ctx: Context<SetInstitutionStatus>,
+        institution_id_hash: [u8; 32],
+        status: u8,
+    ) -> Result<()> {
+        require_keys_eq!(
+            ctx.accounts.protocol_config.admin,
+            ctx.accounts.admin.key(),
+            SolvusError::Unauthorized
+        );
+        require!(
+            institution_id_hash == ctx.accounts.institution_account.institution_id_hash,
+            SolvusError::InvalidInstitutionAccount
+        );
+        require!(
+            status == InstitutionStatus::Active as u8 || status == InstitutionStatus::Suspended as u8,
+            SolvusError::InvalidInstitutionStatus
+        );
+
+        let now = Clock::get()?.unix_timestamp;
+        let institution = &mut ctx.accounts.institution_account;
+        institution.status = status;
+        institution.updated_at = now;
+
+        emit!(InstitutionStatusChangedEvent {
+            institution_id_hash,
+            status,
+            timestamp: now,
+        });
+
+        Ok(())
+    }
+
+    pub fn revoke_compliance_permit(
+        ctx: Context<RevokeCompliancePermit>,
+        institution_id_hash: [u8; 32],
+        nullifier_hash: [u8; 32],
+    ) -> Result<()> {
+        require_keys_eq!(
+            ctx.accounts.protocol_config.admin,
+            ctx.accounts.admin.key(),
+            SolvusError::Unauthorized
+        );
+
+        let institution = &ctx.accounts.institution_account;
+        require!(
+            institution.institution_id_hash == institution_id_hash,
+            SolvusError::InvalidInstitutionAccount
+        );
+
+        let permit = &mut ctx.accounts.compliance_permit;
+        require!(
+            permit.institution_id_hash == institution_id_hash,
+            SolvusError::InvalidCompliancePermit
+        );
+        require!(
+            permit.nullifier_hash == nullifier_hash,
+            SolvusError::InvalidCompliancePermit
+        );
+        require!(
+            permit.used_at <= 0,
+            SolvusError::CompliancePermitAlreadyUsed
+        );
+
+        let now = Clock::get()?.unix_timestamp;
+        permit.used_at = -now;
+
+        emit!(CompliancePermitRevokedEvent {
+            institution_id_hash,
+            nullifier_hash,
+            timestamp: now,
+        });
+
+        Ok(())
+    }
+
     pub fn mint_zkusd(
         ctx: Context<MintZkUsd>,
         nullifier_hash: [u8; 32],
         zkusd_amount: u64,
-        proof: Vec<u8>,
-        public_inputs: Vec<u8>,
         l1_refund_timelock: i64,
     ) -> Result<()> {
         require!(!is_sanctioned(&ctx.accounts.owner.key()), SolvusError::AddressSanctioned);
         require!(zkusd_amount > 0, SolvusError::InvalidAmount);
         require!(zkusd_amount <= MAX_MINT_ZKUSD_AMOUNT, SolvusError::InvalidAmount);
-        require!(!proof.is_empty(), SolvusError::InvalidProof);
-        
+        require!(
+            ctx.accounts.verification_payload.authority == ctx.accounts.fee_payer.key(),
+            SolvusError::InvalidVerificationPayload
+        );
+        require!(
+            ctx.accounts.verification_payload.nullifier_hash == nullifier_hash,
+            SolvusError::InvalidVerificationPayload
+        );
+        require!(
+            ctx.accounts.verification_payload.proof.len() == verifier_contract::GROTH16_PROOF_BYTES,
+            SolvusError::InvalidProof
+        );
+        require!(
+            ctx.accounts.verification_payload.public_inputs.len() == GROTH16_PUBLIC_INPUT_BYTES,
+            SolvusError::InvalidPublicInputs
+        );
+        let now = Clock::get()?.unix_timestamp;
+        let institution_key = ctx.accounts.institution_account.key();
+        let compliance_permit_key = ctx.accounts.compliance_permit.key();
+        authorize_permissioned_mint(
+            &mut ctx.accounts.institution_account,
+            &mut ctx.accounts.compliance_permit,
+            institution_key,
+            compliance_permit_key,
+            ctx.accounts.owner.key(),
+            nullifier_hash,
+            zkusd_amount,
+            now,
+        )?;
+
         // Use Pyth SDK for safe price reading with staleness check
-        let price_feed = load_price_feed_from_account_info(&ctx.accounts.oracle_price_feed)
-            .map_err(|_| error!(SolvusError::OraclePriceFeedNotConfigured))?;
-        let clock = Clock::get()?;
-        let price = price_feed
-            .get_price_no_older_than(clock.unix_timestamp, PYTH_STALENESS_SECONDS)
-            .ok_or(SolvusError::StaleOraclePrice)?;
-        require!(price.status == PriceStatus::Trading, SolvusError::InvalidOraclePrice);
-        let btc_price = price.val as u64;
-        require!(btc_price > 0, SolvusError::InvalidOraclePrice);
+        let btc_price = read_btc_price_1e8(&ctx.accounts.oracle_price_feed)?;
 
         let (btc_data, dlc_contract_id) = assert_canonical_public_inputs(
             &nullifier_hash,
-            &public_inputs,
+            &ctx.accounts.verification_payload.public_inputs,
             &ctx.accounts.protocol_config.authorized_relayer_pubkey_x,
             &ctx.accounts.protocol_config.authorized_relayer_pubkey_y,
             &ctx.accounts.owner.key(),
@@ -176,13 +420,18 @@ pub mod solvus {
         {
             verify_groth16_proof(
                 &ctx.accounts.verifier_program.to_account_info(),
-                proof.clone(),
-                public_inputs.clone(),
+                &ctx.accounts.verification_payload.proof,
+                &ctx.accounts.verification_payload.public_inputs,
             )?;
         }
 
-        let now = Clock::get()?.unix_timestamp;
-        let vault = &mut ctx.accounts.vault;
+        let mut vault = load_or_initialize_vault(
+            &ctx.accounts.vault,
+            &ctx.accounts.owner,
+            &ctx.accounts.fee_payer,
+            &ctx.accounts.system_program,
+            ctx.bumps.vault,
+        )?;
 
         // ADR-002: Prevent vault resurrection after terminal state (Liquidated/Closed)
         if vault.owner != Pubkey::default() {
@@ -237,6 +486,8 @@ pub mod solvus {
             zkusd_amount,
         )?;
 
+        store_vault_state(&ctx.accounts.vault, &vault)?;
+
         emit!(MintZkUsdEvent {
             owner: ctx.accounts.owner.key(),
             nullifier_hash,
@@ -244,6 +495,71 @@ pub mod solvus {
             timestamp: now,
         });
 
+        emit!(InstitutionalMintAuthorizedEvent {
+            institution_id_hash: ctx.accounts.institution_account.institution_id_hash,
+            operator: ctx.accounts.owner.key(),
+            nullifier_hash,
+            amount: zkusd_amount,
+            kyt_score: ctx.accounts.compliance_permit.kyt_score,
+            travel_rule_ref_hash: ctx.accounts.compliance_permit.travel_rule_ref_hash,
+            timestamp: now,
+        });
+
+        Ok(())
+    }
+
+    pub fn initialize_verification_payload(
+        ctx: Context<InitializeVerificationPayload>,
+        nullifier_hash: [u8; 32],
+        max_proof_len: u32,
+        max_public_inputs_len: u32,
+    ) -> Result<()> {
+        require!(max_proof_len > 0, SolvusError::InvalidVerificationPayload);
+        require!(max_public_inputs_len > 0, SolvusError::InvalidVerificationPayload);
+
+        let payload = &mut ctx.accounts.verification_payload;
+        payload.authority = ctx.accounts.authority.key();
+        payload.nullifier_hash = nullifier_hash;
+        payload.max_proof_len = max_proof_len;
+        payload.max_public_inputs_len = max_public_inputs_len;
+        payload.proof = Vec::new();
+        payload.public_inputs = Vec::new();
+        Ok(())
+    }
+
+    pub fn append_verification_payload_proof_chunk(
+        ctx: Context<AppendVerificationPayloadChunk>,
+        chunk: Vec<u8>,
+    ) -> Result<()> {
+        let payload = &mut ctx.accounts.verification_payload;
+        let next_len = payload
+            .proof
+            .len()
+            .checked_add(chunk.len())
+            .ok_or(SolvusError::MathOverflow)?;
+        require!(
+            next_len <= payload.max_proof_len as usize,
+            SolvusError::InvalidVerificationPayload
+        );
+        payload.proof.extend_from_slice(&chunk);
+        Ok(())
+    }
+
+    pub fn append_verification_payload_public_inputs_chunk(
+        ctx: Context<AppendVerificationPayloadChunk>,
+        chunk: Vec<u8>,
+    ) -> Result<()> {
+        let payload = &mut ctx.accounts.verification_payload;
+        let next_len = payload
+            .public_inputs
+            .len()
+            .checked_add(chunk.len())
+            .ok_or(SolvusError::MathOverflow)?;
+        require!(
+            next_len <= payload.max_public_inputs_len as usize,
+            SolvusError::InvalidVerificationPayload
+        );
+        payload.public_inputs.extend_from_slice(&chunk);
         Ok(())
     }
 
@@ -288,15 +604,7 @@ pub mod solvus {
         // If burning all zkusd, skip collateral check
         if remaining_zkusd > 0 {
             // Use Pyth SDK for safe price reading with staleness check
-            let price_feed = load_price_feed_from_account_info(&ctx.accounts.oracle_price_feed)
-                .map_err(|_| error!(SolvusError::OraclePriceFeedNotConfigured))?;
-            let clock = Clock::get()?;
-            let price = price_feed
-                .get_price_no_older_than(clock.unix_timestamp, PYTH_STALENESS_SECONDS)
-                .ok_or(SolvusError::StaleOraclePrice)?;
-            require!(price.status == PriceStatus::Trading, SolvusError::InvalidOraclePrice);
-            let btc_price = price.val as u64;
-            require!(btc_price > 0, SolvusError::InvalidOraclePrice);
+            let btc_price = read_btc_price_1e8(&ctx.accounts.oracle_price_feed)?;
 
             // Check remaining collateral >= 150% of remaining zkusd
             // Formula: required_satoshi = (zkusd_amount * 1.5 * 10^6) / (btc_price * 10^-8)
@@ -394,6 +702,66 @@ pub mod solvus {
         Ok(())
     }
 
+    // ADR-007: Permissionless crank function to update vault health based on oracle price
+    pub fn update_vault_health(ctx: Context<UpdateVaultHealth>) -> Result<()> {
+        let vault = &mut ctx.accounts.vault;
+
+        // Skip if vault is in terminal state
+        require!(
+            vault.status != VaultStatus::Liquidated as u8
+                && vault.status != VaultStatus::Closed as u8,
+            SolvusError::VaultInTerminalState
+        );
+
+        // Skip if vault has no debt
+        if vault.zkusd_minted == 0 {
+            return Ok(());
+        }
+
+        let btc_price = read_btc_price_1e8(&ctx.accounts.oracle_price_feed)?;
+
+        // Calculate required collateral for 150% CR
+        // Formula: required_satoshi = (zkusd_amount * 1_500_000_000) / btc_price
+        let required_collateral = (vault.zkusd_minted as u128)
+            .checked_mul(1_500_000_000)
+            .ok_or(SolvusError::MathOverflow)?
+            .checked_div(btc_price as u128)
+            .ok_or(SolvusError::MathOverflow)? as u64;
+
+        let now = Clock::get()?.unix_timestamp;
+
+        // Update vault status based on collateral ratio
+        if vault.collateral_btc < required_collateral {
+            // Below 100% - Unhealthy
+            vault.status = VaultStatus::Unhealthy as u8;
+        } else if vault.collateral_btc < required_collateral * 12 / 10 {
+            // Between 100% and 120% - AtRisk
+            vault.status = VaultStatus::AtRisk as u8;
+        } else if vault.collateral_btc >= required_collateral * 15 / 10 {
+            // Above 150% - Healthy
+            if vault.status != VaultStatus::Initialized as u8
+                && vault.status != VaultStatus::PendingBtcRelease as u8
+                && vault.status != VaultStatus::DlcTimeoutPending as u8
+            {
+                vault.status = VaultStatus::Healthy as u8;
+            }
+        }
+
+        vault.last_update = now;
+
+        emit!(VaultHealthUpdatedEvent {
+            owner: vault.owner,
+            collateral_btc: vault.collateral_btc,
+            zkusd_minted: vault.zkusd_minted,
+            required_collateral,
+            btc_price,
+            new_status: vault.status,
+            timestamp: now,
+        });
+
+        Ok(())
+    }
+
     pub fn liquidate_vault_cpi(
         ctx: Context<LiquidateVaultCpi>,
         collateral_seized: u64,
@@ -451,6 +819,35 @@ pub mod solvus {
             .checked_sub(collateral_seized)
             .ok_or(SolvusError::MathOverflow)?;
 
+        let liquidator_zkusd_account = &ctx.accounts.liquidator_zkusd_token_account;
+        require_keys_eq!(
+            liquidator_zkusd_account.owner,
+            ctx.accounts.liquidator.key(),
+            SolvusError::Unauthorized
+        );
+        require_keys_eq!(
+            liquidator_zkusd_account.mint,
+            ctx.accounts.zkusd_mint.key(),
+            SolvusError::InvalidZkUsdTokenAccount
+        );
+
+        // ADR-006: Liquidator repays the vault debt in zkUSD, then the protocol burns it.
+        let zkusd_to_burn = vault.zkusd_minted;
+        if zkusd_to_burn > 0 {
+            let burn_accounts = Burn {
+                mint: ctx.accounts.zkusd_mint.to_account_info(),
+                from: liquidator_zkusd_account.to_account_info(),
+                authority: ctx.accounts.liquidator.to_account_info(),
+            };
+            token::burn(
+                CpiContext::new(
+                    ctx.accounts.token_program.to_account_info(),
+                    burn_accounts,
+                ),
+                zkusd_to_burn,
+            )?;
+        }
+
         vault.zkusd_minted = 0;
         vault.status = VaultStatus::Liquidated as u8;
         vault.last_update = now;
@@ -467,9 +864,69 @@ pub mod solvus {
     }
 }
 
-fn is_sanctioned(pubkey: &Pubkey) -> bool {
+fn is_sanctioned(_pubkey: &Pubkey) -> bool {
     // Placeholder for future on-chain registry or token2022 transfer-hook check
     false
+}
+
+fn read_btc_price_1e8(oracle_price_feed: &UncheckedAccount<'_>) -> Result<u64> {
+    let price_update = load_price_update_v2(oracle_price_feed)?;
+    let clock = Clock::get()?;
+    let feed_id = decode_feed_id(BTC_USD_FEED_ID)?;
+    let price = price_update.get_price_no_older_than(&clock, PYTH_STALENESS_SECONDS as u64, &feed_id)?;
+    scale_price_to_1e8(price.price, price.exponent)
+}
+
+fn load_price_update_v2(oracle_price_feed: &UncheckedAccount<'_>) -> Result<PriceUpdateV2> {
+    require_keys_eq!(
+        *oracle_price_feed.owner,
+        PYTH_RECEIVER_PROGRAM_ID,
+        SolvusError::OraclePriceFeedNotConfigured
+    );
+    let data = oracle_price_feed.try_borrow_data()?;
+    let mut data_slice: &[u8] = &data;
+    PriceUpdateV2::try_deserialize(&mut data_slice)
+        .map_err(|_| error!(SolvusError::OraclePriceFeedNotConfigured))
+}
+
+fn decode_feed_id(feed_id_hex: &str) -> Result<[u8; 32]> {
+    let input = feed_id_hex.strip_prefix("0x").unwrap_or(feed_id_hex);
+    require!(input.len() == 64, SolvusError::OraclePriceFeedNotConfigured);
+
+    let mut feed_id = [0u8; 32];
+    for (index, chunk) in input.as_bytes().chunks(2).enumerate() {
+        let hex_pair = std::str::from_utf8(chunk).map_err(|_| error!(SolvusError::OraclePriceFeedNotConfigured))?;
+        feed_id[index] = u8::from_str_radix(hex_pair, 16)
+            .map_err(|_| error!(SolvusError::OraclePriceFeedNotConfigured))?;
+    }
+    Ok(feed_id)
+}
+
+fn scale_price_to_1e8(price: i64, expo: i32) -> Result<u64> {
+    require!(price > 0, SolvusError::InvalidOraclePrice);
+
+    let adjustment = expo
+        .checked_add(8)
+        .ok_or(SolvusError::MathOverflow)?;
+    let mut scaled = i128::from(price);
+
+    if adjustment >= 0 {
+        let factor = 10i128
+            .checked_pow(adjustment as u32)
+            .ok_or(SolvusError::MathOverflow)?;
+        scaled = scaled
+            .checked_mul(factor)
+            .ok_or(SolvusError::MathOverflow)?;
+    } else {
+        let factor = 10i128
+            .checked_pow((-adjustment) as u32)
+            .ok_or(SolvusError::MathOverflow)?;
+        scaled = scaled
+            .checked_div(factor)
+            .ok_or(SolvusError::MathOverflow)?;
+    }
+
+    u64::try_from(scaled).map_err(|_| error!(SolvusError::MathOverflow))
 }
 
 fn assert_canonical_public_inputs(
@@ -558,23 +1015,16 @@ fn assert_canonical_public_inputs(
 
 fn verify_groth16_proof(
     verifier_program: &AccountInfo<'_>,
-    proof: Vec<u8>,
-    public_inputs: Vec<u8>,
+    proof: &[u8],
+    public_inputs: &[u8],
 ) -> Result<()> {
     require!(
         verifier_program.key() != Pubkey::default(),
         SolvusError::VerifierProgramNotConfigured
     );
 
-    // Build length-prefixed payload: [u32LE proof_len][proof][u32LE pi_len][public_inputs]
-    let proof_len = (proof.len() as u32).to_le_bytes();
-    let pi_len = (public_inputs.len() as u32).to_le_bytes();
-
-    let mut instruction_data =
-        Vec::with_capacity(4 + proof.len() + 4 + public_inputs.len());
-    instruction_data.extend_from_slice(&proof_len);
+    let mut instruction_data = Vec::with_capacity(proof.len() + public_inputs.len());
     instruction_data.extend_from_slice(&proof);
-    instruction_data.extend_from_slice(&pi_len);
     instruction_data.extend_from_slice(&public_inputs);
 
     let instruction = Instruction {
@@ -585,6 +1035,124 @@ fn verify_groth16_proof(
 
     invoke(&instruction, &[verifier_program.clone()])
         .map_err(|_| error!(SolvusError::InvalidProof))
+}
+
+fn load_or_initialize_vault<'info>(
+    vault_info: &UncheckedAccount<'info>,
+    owner: &Signer<'info>,
+    fee_payer: &Signer<'info>,
+    system_program: &Program<'info, System>,
+    vault_bump: u8,
+) -> Result<VaultState> {
+    let vault_exists = vault_info.owner == &crate::ID && vault_info.data_len() > 0;
+    if !vault_exists {
+        let rent = Rent::get()?;
+        let lamports = rent.minimum_balance(8 + VaultState::LEN);
+        let owner_key = owner.key();
+        let signer_seeds: &[&[u8]] = &[VAULT_SEED, owner_key.as_ref(), &[vault_bump]];
+        let signer_seed_slices = [signer_seeds];
+        let create_account_ctx = CpiContext::new(
+            system_program.to_account_info(),
+            CreateAccount {
+                from: fee_payer.to_account_info(),
+                to: vault_info.to_account_info(),
+            },
+        )
+        .with_signer(&signer_seed_slices);
+        system_program::create_account(
+            create_account_ctx,
+            lamports,
+            (8 + VaultState::LEN) as u64,
+            &crate::ID,
+        )?;
+
+        let vault = VaultState::default();
+        store_vault_state(vault_info, &vault)?;
+        return Ok(vault);
+    }
+
+    require_keys_eq!(*vault_info.owner, crate::ID, SolvusError::InvalidVaultAccount);
+    require!(
+        vault_info.data_len() >= VAULT_ACCOUNT_MIN_SPACE,
+        SolvusError::InvalidVaultAccount
+    );
+
+    let data = vault_info.try_borrow_data()?;
+    let mut data_slice: &[u8] = &data;
+    VaultState::try_deserialize(&mut data_slice).map_err(Into::into)
+}
+
+fn store_vault_state(vault_info: &UncheckedAccount<'_>, vault: &VaultState) -> Result<()> {
+    require_keys_eq!(*vault_info.owner, crate::ID, SolvusError::InvalidVaultAccount);
+    let mut data = vault_info.try_borrow_mut_data()?;
+    let mut data_slice: &mut [u8] = &mut data;
+    vault.try_serialize(&mut data_slice)?;
+    Ok(())
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
+pub enum VerificationLevel {
+    Partial { num_signatures: u8 },
+    Full,
+}
+
+impl VerificationLevel {
+    fn gte(&self, other: VerificationLevel) -> bool {
+        match self {
+            VerificationLevel::Full => true,
+            VerificationLevel::Partial { num_signatures } => match other {
+                VerificationLevel::Full => false,
+                VerificationLevel::Partial {
+                    num_signatures: other_num_signatures,
+                } => *num_signatures >= other_num_signatures,
+            },
+        }
+    }
+}
+
+#[account]
+pub struct PriceUpdateV2 {
+    pub write_authority: Pubkey,
+    pub verification_level: VerificationLevel,
+    pub price_message: PriceFeedMessage,
+    pub posted_slot: u64,
+}
+
+#[derive(Clone, Copy)]
+pub struct Price {
+    pub price: i64,
+    pub exponent: i32,
+    pub publish_time: i64,
+}
+
+impl PriceUpdateV2 {
+    fn get_price_no_older_than(
+        &self,
+        clock: &Clock,
+        maximum_age: u64,
+        feed_id: &[u8; 32],
+    ) -> Result<Price> {
+        require!(
+            self.verification_level.gte(VerificationLevel::Full),
+            SolvusError::OraclePriceFeedNotConfigured
+        );
+        require!(
+            self.price_message.feed_id == *feed_id,
+            SolvusError::OraclePriceFeedNotConfigured
+        );
+        require!(
+            self.price_message
+                .publish_time
+                .saturating_add(maximum_age as i64)
+                >= clock.unix_timestamp,
+            SolvusError::StaleOraclePrice
+        );
+        Ok(Price {
+            price: self.price_message.price,
+            exponent: self.price_message.exponent,
+            publish_time: self.price_message.publish_time,
+        })
+    }
 }
 
 #[derive(Accounts)]
@@ -606,12 +1174,79 @@ pub struct InitializeProtocolConfig<'info> {
 pub struct UpdateProtocolConfig<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
+    /// CHECK: Deserialized manually to support legacy ProtocolConfig migration.
     #[account(mut, seeds = [PROTOCOL_CONFIG_SEED], bump)]
-    pub protocol_config: Account<'info, ProtocolConfig>,
+    pub protocol_config: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
-#[instruction(nullifier_hash: [u8; 32], zkusd_amount: u64, proof: Vec<u8>, public_inputs: Vec<u8>)]
+#[instruction(institution_id_hash: [u8; 32])]
+pub struct UpsertInstitution<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [PROTOCOL_CONFIG_SEED], bump)]
+    pub protocol_config: Account<'info, ProtocolConfig>,
+    #[account(
+        init_if_needed,
+        payer = admin,
+        space = 8 + InstitutionAccount::LEN,
+        seeds = [INSTITUTION_ACCOUNT_SEED, institution_id_hash.as_ref()],
+        bump
+    )]
+    pub institution_account: Account<'info, InstitutionAccount>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(institution_id_hash: [u8; 32], nullifier_hash: [u8; 32])]
+pub struct IssueCompliancePermit<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [PROTOCOL_CONFIG_SEED], bump)]
+    pub protocol_config: Account<'info, ProtocolConfig>,
+    #[account(seeds = [INSTITUTION_ACCOUNT_SEED, institution_id_hash.as_ref()], bump)]
+    pub institution_account: Account<'info, InstitutionAccount>,
+    #[account(
+        init,
+        payer = admin,
+        space = 8 + CompliancePermit::LEN,
+        seeds = [COMPLIANCE_PERMIT_SEED, institution_id_hash.as_ref(), nullifier_hash.as_ref()],
+        bump
+    )]
+    pub compliance_permit: Account<'info, CompliancePermit>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(institution_id_hash: [u8; 32])]
+pub struct SetInstitutionStatus<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [PROTOCOL_CONFIG_SEED], bump)]
+    pub protocol_config: Account<'info, ProtocolConfig>,
+    #[account(mut, seeds = [INSTITUTION_ACCOUNT_SEED, institution_id_hash.as_ref()], bump)]
+    pub institution_account: Account<'info, InstitutionAccount>,
+}
+
+#[derive(Accounts)]
+#[instruction(institution_id_hash: [u8; 32], nullifier_hash: [u8; 32])]
+pub struct RevokeCompliancePermit<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [PROTOCOL_CONFIG_SEED], bump)]
+    pub protocol_config: Account<'info, ProtocolConfig>,
+    #[account(seeds = [INSTITUTION_ACCOUNT_SEED, institution_id_hash.as_ref()], bump)]
+    pub institution_account: Account<'info, InstitutionAccount>,
+    #[account(
+        mut,
+        seeds = [COMPLIANCE_PERMIT_SEED, institution_id_hash.as_ref(), nullifier_hash.as_ref()],
+        bump
+    )]
+    pub compliance_permit: Account<'info, CompliancePermit>,
+}
+
+#[derive(Accounts)]
+#[instruction(nullifier_hash: [u8; 32], zkusd_amount: u64)]
 pub struct MintZkUsd<'info> {
     #[account(mut)]
     pub owner: Signer<'info>,
@@ -619,17 +1254,17 @@ pub struct MintZkUsd<'info> {
     pub fee_payer: Signer<'info>,
     #[account(seeds = [PROTOCOL_CONFIG_SEED], bump)]
     pub protocol_config: Account<'info, ProtocolConfig>,
-    /// CHECK: Validated manually against protocol_config
+    #[account(mut)]
+    pub institution_account: Account<'info, InstitutionAccount>,
+    #[account(mut)]
+    pub compliance_permit: Account<'info, CompliancePermit>,
+    /// CHECK: Receiver-program ownership and PriceUpdateV2 layout are validated manually.
     #[account(address = protocol_config.oracle_price_feed_id)]
-    pub oracle_price_feed: AccountInfo<'info>,
-    #[account(
-        init_if_needed,
-        payer = fee_payer,
-        space = 8 + VaultState::LEN,
-        seeds = [VAULT_SEED, owner.key().as_ref()],
-        bump
-    )]
-    pub vault: Account<'info, VaultState>,
+    pub oracle_price_feed: UncheckedAccount<'info>,
+    /// CHECK: PDA ownership, size, and serialization are validated manually so
+    /// existing oversized vault accounts remain usable across upgrades.
+    #[account(mut, seeds = [VAULT_SEED, owner.key().as_ref()], bump)]
+    pub vault: UncheckedAccount<'info>,
     #[account(
         init,
         payer = fee_payer,
@@ -638,6 +1273,13 @@ pub struct MintZkUsd<'info> {
         bump
     )]
     pub nullifier_account: Account<'info, NullifierAccount>,
+    #[account(
+        mut,
+        close = fee_payer,
+        seeds = [VERIFICATION_PAYLOAD_SEED, nullifier_hash.as_ref()],
+        bump
+    )]
+    pub verification_payload: Account<'info, VerificationPayload>,
     #[account(mut)]
     pub zkusd_mint: Account<'info, Mint>,
     #[account(mut)]
@@ -648,6 +1290,32 @@ pub struct MintZkUsd<'info> {
     pub verifier_program: UncheckedAccount<'info>,
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(nullifier_hash: [u8; 32], max_proof_len: u32, max_public_inputs_len: u32)]
+pub struct InitializeVerificationPayload<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + VerificationPayload::base_len()
+            + max_proof_len as usize
+            + max_public_inputs_len as usize,
+        seeds = [VERIFICATION_PAYLOAD_SEED, nullifier_hash.as_ref()],
+        bump
+    )]
+    pub verification_payload: Account<'info, VerificationPayload>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct AppendVerificationPayloadChunk<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    #[account(mut, has_one = authority)]
+    pub verification_payload: Account<'info, VerificationPayload>,
 }
 
 #[derive(Accounts)]
@@ -662,9 +1330,9 @@ pub struct BurnZkUsd<'info> {
     pub zkusd_token_account: Account<'info, TokenAccount>,
     #[account(seeds = [PROTOCOL_CONFIG_SEED], bump)]
     pub protocol_config: Account<'info, ProtocolConfig>,
-    /// CHECK: Validated manually against protocol_config
+    /// CHECK: Receiver-program ownership and PriceUpdateV2 layout are validated manually.
     #[account(address = protocol_config.oracle_price_feed_id)]
-    pub oracle_price_feed: AccountInfo<'info>,
+    pub oracle_price_feed: UncheckedAccount<'info>,
     pub token_program: Program<'info, Token>,
 }
 
@@ -694,6 +1362,31 @@ pub struct EnterGracePeriod<'info> {
     pub vault: Account<'info, VaultState>,
 }
 
+// ADR-007: Context for permissionless crank function
+#[derive(Accounts)]
+pub struct UpdateVaultHealth<'info> {
+    /// CHECK: Any account can trigger the crank
+    pub caller: Signer<'info>,
+    #[account(seeds = [PROTOCOL_CONFIG_SEED], bump)]
+    pub protocol_config: Account<'info, ProtocolConfig>,
+    #[account(mut)]
+    pub vault: Account<'info, VaultState>,
+    /// CHECK: Receiver-program ownership and PriceUpdateV2 layout are validated manually.
+    #[account(address = protocol_config.oracle_price_feed_id)]
+    pub oracle_price_feed: UncheckedAccount<'info>,
+}
+
+#[event]
+pub struct VaultHealthUpdatedEvent {
+    pub owner: Pubkey,
+    pub collateral_btc: u64,
+    pub zkusd_minted: u64,
+    pub required_collateral: u64,
+    pub btc_price: u64,
+    pub new_status: u8,
+    pub timestamp: i64,
+}
+
 #[derive(Accounts)]
 pub struct LiquidateVaultCpi<'info> {
     #[account(mut)]
@@ -704,6 +1397,12 @@ pub struct LiquidateVaultCpi<'info> {
     pub vault: Account<'info, VaultState>,
     /// CHECK: validated against protocol_config.liquidation_program_id
     pub liquidation_program: UncheckedAccount<'info>,
+    // ADR-006: Liquidator repays debt in zkUSD, then the protocol burns it.
+    pub token_program: Program<'info, Token>,
+    #[account(mut)]
+    pub zkusd_mint: Account<'info, Mint>,
+    #[account(mut)]
+    pub liquidator_zkusd_token_account: Account<'info, TokenAccount>,
 }
 
 #[account]
@@ -733,6 +1432,73 @@ impl ProtocolConfig {
 }
 
 #[account]
+pub struct VerificationPayload {
+    pub authority: Pubkey,
+    pub nullifier_hash: [u8; 32],
+    pub max_proof_len: u32,
+    pub max_public_inputs_len: u32,
+    pub proof: Vec<u8>,
+    pub public_inputs: Vec<u8>,
+}
+
+impl VerificationPayload {
+    pub const fn base_len() -> usize {
+        32 + 32 + 4 + 4 + 4 + 4
+    }
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy)]
+pub struct LegacyProtocolConfigV1 {
+    pub admin: Pubkey,
+    pub groth16_verifier_program_id: Pubkey,
+    pub oracle_price_feed_id: Pubkey,
+    pub updated_at: i64,
+}
+
+impl LegacyProtocolConfigV1 {
+    pub const LEN: usize = 32 + 32 + 32 + 8;
+}
+
+#[account]
+pub struct InstitutionAccount {
+    pub institution_id_hash: [u8; 32],
+    pub approved_operator: Pubkey,
+    pub status: u8,
+    pub risk_tier: u8,
+    pub daily_mint_cap: u64,
+    pub lifetime_mint_cap: u64,
+    pub minted_total: u64,
+    pub current_period_start: i64,
+    pub current_period_minted: u64,
+    pub kyb_ref_hash: [u8; 32],
+    pub travel_rule_required: bool,
+    pub updated_at: i64,
+}
+
+impl InstitutionAccount {
+    pub const LEN: usize = 32 + 32 + 1 + 1 + 8 + 8 + 8 + 8 + 8 + 32 + 1 + 8;
+}
+
+#[account]
+pub struct CompliancePermit {
+    pub institution_id_hash: [u8; 32],
+    pub operator: Pubkey,
+    pub nullifier_hash: [u8; 32],
+    pub max_amount: u64,
+    pub expires_at: i64,
+    pub kyt_score: u16,
+    pub kyb_ref_hash: [u8; 32],
+    pub travel_rule_ref_hash: [u8; 32],
+    pub issued_by: Pubkey,
+    pub issued_at: i64,
+    pub used_at: i64,
+}
+
+impl CompliancePermit {
+    pub const LEN: usize = 32 + 32 + 32 + 8 + 8 + 2 + 32 + 32 + 32 + 8 + 8;
+}
+
+#[account]
 pub struct VaultState {
     pub owner: Pubkey,
     pub collateral_btc: u64,
@@ -747,7 +1513,25 @@ pub struct VaultState {
 }
 
 impl VaultState {
-    pub const LEN: usize = 168; // 160 + 8 for l1_refund_timelock
+    pub const MIN_LEN: usize = 32 + 8 + 8 + 8 + 1 + 9 + 9 + 33 + 9 + 8;
+    pub const LEN: usize = 176; // Matches the deployed vault allocation on devnet.
+}
+
+impl Default for VaultState {
+    fn default() -> Self {
+        Self {
+            owner: Pubkey::default(),
+            collateral_btc: 0,
+            zkusd_minted: 0,
+            last_update: 0,
+            status: VaultStatus::Initialized as u8,
+            liquidation_price: None,
+            grace_period_end: None,
+            dlc_contract_id: None,
+            dlc_close_deadline: None,
+            l1_refund_timelock: 0,
+        }
+    }
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
@@ -761,6 +1545,13 @@ pub enum VaultStatus {
     Closed = 6,
     PendingBtcRelease = 7,
     DlcTimeoutPending = 8,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
+pub enum InstitutionStatus {
+    Uninitialized = 0,
+    Active = 1,
+    Suspended = 2,
 }
 
 #[event]
@@ -794,6 +1585,55 @@ pub struct DlcClosedEvent {
 }
 
 #[event]
+pub struct InstitutionUpsertedEvent {
+    pub institution_id_hash: [u8; 32],
+    pub approved_operator: Pubkey,
+    pub risk_tier: u8,
+    pub daily_mint_cap: u64,
+    pub lifetime_mint_cap: u64,
+    pub kyb_ref_hash: [u8; 32],
+    pub travel_rule_required: bool,
+    pub timestamp: i64,
+}
+
+#[event]
+pub struct CompliancePermitIssuedEvent {
+    pub institution_id_hash: [u8; 32],
+    pub operator: Pubkey,
+    pub nullifier_hash: [u8; 32],
+    pub max_amount: u64,
+    pub expires_at: i64,
+    pub kyt_score: u16,
+    pub travel_rule_ref_hash: [u8; 32],
+    pub timestamp: i64,
+}
+
+#[event]
+pub struct InstitutionalMintAuthorizedEvent {
+    pub institution_id_hash: [u8; 32],
+    pub operator: Pubkey,
+    pub nullifier_hash: [u8; 32],
+    pub amount: u64,
+    pub kyt_score: u16,
+    pub travel_rule_ref_hash: [u8; 32],
+    pub timestamp: i64,
+}
+
+#[event]
+pub struct InstitutionStatusChangedEvent {
+    pub institution_id_hash: [u8; 32],
+    pub status: u8,
+    pub timestamp: i64,
+}
+
+#[event]
+pub struct CompliancePermitRevokedEvent {
+    pub institution_id_hash: [u8; 32],
+    pub nullifier_hash: [u8; 32],
+    pub timestamp: i64,
+}
+
+#[event]
 pub struct ProtocolConfigUpdatedEvent {
     pub admin: Pubkey,
     pub groth16_verifier_program_id: Pubkey,
@@ -823,6 +1663,8 @@ pub enum SolvusError {
     PublicInputsNullifierMismatch,
     #[msg("Invalid token program")]
     InvalidTokenProgram,
+    #[msg("Invalid zkUSD token account for liquidation")]
+    InvalidZkUsdTokenAccount,
     #[msg("Invalid verifier program")]
     InvalidVerifierProgram,
     #[msg("Verifier program is not configured")]
@@ -883,4 +1725,176 @@ pub enum SolvusError {
     VaultNotPendingBtcReleaseAlt,
     #[msg("Proof generation timed out")]
     ProofServerTimeout,
+    #[msg("Invalid protocol config account")]
+    InvalidProtocolConfig,
+    #[msg("Invalid verification payload account")]
+    InvalidVerificationPayload,
+    #[msg("Invalid vault account")]
+    InvalidVaultAccount,
+    #[msg("Invalid institution account")]
+    InvalidInstitutionAccount,
+    #[msg("Institution is not active")]
+    InstitutionInactive,
+    #[msg("Minting operator is not approved for this institution")]
+    OperatorNotApproved,
+    #[msg("Institution mint cap exceeded")]
+    InstitutionMintCapExceeded,
+    #[msg("Invalid compliance permit")]
+    InvalidCompliancePermit,
+    #[msg("Compliance permit has expired")]
+    CompliancePermitExpired,
+    #[msg("Compliance permit has already been consumed")]
+    CompliancePermitAlreadyUsed,
+    #[msg("Requested amount exceeds the compliance permit")]
+    CompliancePermitAmountExceeded,
+    #[msg("Travel Rule reference is required")]
+    TravelRuleRequired,
+    #[msg("Invalid institution status")]
+    InvalidInstitutionStatus,
+    #[msg("Compliance permit has been revoked")]
+    CompliancePermitRevoked,
+}
+
+fn authorize_permissioned_mint(
+    institution: &mut Account<'_, InstitutionAccount>,
+    compliance_permit: &mut Account<'_, CompliancePermit>,
+    institution_key: Pubkey,
+    permit_key: Pubkey,
+    owner: Pubkey,
+    nullifier_hash: [u8; 32],
+    zkusd_amount: u64,
+    now: i64,
+) -> Result<()> {
+    require!(
+        institution.status == InstitutionStatus::Active as u8,
+        SolvusError::InstitutionInactive
+    );
+    require_keys_eq!(
+        institution.approved_operator,
+        owner,
+        SolvusError::OperatorNotApproved
+    );
+
+    let (expected_institution_pda, _) = Pubkey::find_program_address(
+        &[INSTITUTION_ACCOUNT_SEED, institution.institution_id_hash.as_ref()],
+        &crate::ID,
+    );
+    require_keys_eq!(
+        expected_institution_pda,
+        institution_key,
+        SolvusError::InvalidInstitutionAccount
+    );
+
+    let (expected_permit_pda, _) = Pubkey::find_program_address(
+        &[
+            COMPLIANCE_PERMIT_SEED,
+            institution.institution_id_hash.as_ref(),
+            nullifier_hash.as_ref(),
+        ],
+        &crate::ID,
+    );
+    require_keys_eq!(
+        expected_permit_pda,
+        permit_key,
+        SolvusError::InvalidCompliancePermit
+    );
+    require!(
+        compliance_permit.institution_id_hash == institution.institution_id_hash,
+        SolvusError::InvalidCompliancePermit
+    );
+    require!(
+        compliance_permit.nullifier_hash == nullifier_hash,
+        SolvusError::InvalidCompliancePermit
+    );
+    require_keys_eq!(
+        compliance_permit.operator,
+        owner,
+        SolvusError::OperatorNotApproved
+    );
+    require!(
+        compliance_permit.kyb_ref_hash == institution.kyb_ref_hash,
+        SolvusError::InvalidCompliancePermit
+    );
+    if institution.travel_rule_required {
+        require!(
+            compliance_permit.travel_rule_ref_hash != [0u8; 32],
+            SolvusError::TravelRuleRequired
+        );
+    }
+    require!(
+        compliance_permit.used_at >= 0,
+        SolvusError::CompliancePermitRevoked
+    );
+    require!(
+        compliance_permit.used_at == 0,
+        SolvusError::CompliancePermitAlreadyUsed
+    );
+    require!(
+        compliance_permit.expires_at >= now,
+        SolvusError::CompliancePermitExpired
+    );
+    require!(
+        compliance_permit.max_amount >= zkusd_amount,
+        SolvusError::CompliancePermitAmountExceeded
+    );
+
+    if institution.current_period_start == 0
+        || now.saturating_sub(institution.current_period_start) >= INSTITUTION_MINT_WINDOW_SECONDS
+    {
+        institution.current_period_start = now;
+        institution.current_period_minted = 0;
+    }
+
+    institution.current_period_minted = institution
+        .current_period_minted
+        .checked_add(zkusd_amount)
+        .ok_or(SolvusError::MathOverflow)?;
+    institution.minted_total = institution
+        .minted_total
+        .checked_add(zkusd_amount)
+        .ok_or(SolvusError::MathOverflow)?;
+    require!(
+        institution.current_period_minted <= institution.daily_mint_cap,
+        SolvusError::InstitutionMintCapExceeded
+    );
+    require!(
+        institution.minted_total <= institution.lifetime_mint_cap,
+        SolvusError::InstitutionMintCapExceeded
+    );
+
+    institution.updated_at = now;
+    compliance_permit.used_at = now;
+    Ok(())
+}
+
+fn load_protocol_config_admin(protocol_config_info: &AccountInfo<'_>) -> Result<Pubkey> {
+    let data = protocol_config_info.try_borrow_data()?;
+    require!(data.len() >= 8, SolvusError::InvalidProtocolConfig);
+    require!(
+        &data[..8] == ProtocolConfig::DISCRIMINATOR,
+        SolvusError::InvalidProtocolConfig
+    );
+
+    let mut payload: &[u8] = &data[8..];
+    if data.len() == 8 + ProtocolConfig::LEN {
+        let config = ProtocolConfig::deserialize(&mut payload)?;
+        Ok(config.admin)
+    } else if data.len() == 8 + LegacyProtocolConfigV1::LEN {
+        let config = LegacyProtocolConfigV1::deserialize(&mut payload)?;
+        Ok(config.admin)
+    } else {
+        err!(SolvusError::InvalidProtocolConfig)
+    }
+}
+
+fn store_protocol_config(protocol_config_info: &AccountInfo<'_>, config: &ProtocolConfig) -> Result<()> {
+    let mut data = protocol_config_info.try_borrow_mut_data()?;
+    require!(
+        data.len() == 8 + ProtocolConfig::LEN,
+        SolvusError::InvalidProtocolConfig
+    );
+    data[..8].copy_from_slice(&ProtocolConfig::DISCRIMINATOR);
+    let mut payload = &mut data[8..];
+    config.serialize(&mut payload)?;
+    Ok(())
 }

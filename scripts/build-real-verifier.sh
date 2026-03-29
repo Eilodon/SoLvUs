@@ -60,4 +60,4 @@ export GNARK_VERIFIER_BIN="$VERIFIER_BIN_DIR"
 export PATH="$HOME/.local/go/bin:$SOLANA_BIN_DIR:$PATH"
 
 "$SUNSPOT_BIN" deploy "$VK_PATH"
-
+npm run sample:verifier-manifest

@@ -1,6 +1,6 @@
 # Devnet Runbook
 
-Verified on 2026-03-21.
+Verified on 2026-03-29.
 
 ## Active Devnet IDs
 - `GROTH16_VERIFIER_PROGRAM_ID=EVA4sSUJ2V3cXkT9fHpSHWbVnxBfPuUQUtRChxwg36Cn`
@@ -11,9 +11,14 @@ Verified on 2026-03-21.
 
 ## Verified Transactions
 - Real verifier upgrade: `5S3phU8J1wpSh4MV8Ns7S6BqJQnzemA1mGjUbDQNBcic99Gs4enBvSJVnA7G6Lcn7zashWGn2uXMivjfvLF8dzgQ`
-- `solvus` upgrade: `5NXvkiQ3eDicb1DZccx3npJf6AgsiTTTWYhnUNubB6PrNheosAvuoqdNdWrpmHaEXia8LEzSL2TTbSbUmKcQgfkC`
+- Previous `solvus` upgrade: `5NXvkiQ3eDicb1DZccx3npJf6AgsiTTTWYhnUNubB6PrNheosAvuoqdNdWrpmHaEXia8LEzSL2TTbSbUmKcQgfkC`
+- Latest `solvus` upgrade with institutional controls: `sZwWuSoLuWqBS71MVwaHmH41ZGXfwa8U1kVgeoHXgCwBXRaWsCH9gUcFUZKCJ2SREqzLhs9of9eubaqCfA7WKus`
 - `update_protocol_config`: `2pqY1tVoUiyLxQQnbeLd4zR6xkkA34AYjvtk117eLb6rADHCBNe28jr4Ts8E8QwHqD4Mq6dYxkxRsBJZqLtTzutA`
 - Real proof `mint_zkusd` smoke test: `WqAxERPe3Qmtuzyqnak7TPimTaVQTvgvPQ4P5E1vBp3to4NB3uyeW7xERtVZqdhwig9E5xdad3CvKaDnzF3PzqR`
+- Institutional suspend action: `23qzYwKKnk55UUiM8nLAwrPMoU2L7oNh5XKN17yG754S4wxPk3Y9qhngD3cPDrikzKCEVbzR5tgD3Dg3esXQYwLK`
+- Institutional reactivate action: `3azmjkFPRAT1Mq6iqihuRsryA1nzC5PQBAM7W91zrihGh8yWF1KNqEabTNVMRTvixjsWJqk7yNeu9zUZi55XAKdE`
+- Permit revoke action: `2tBTMzc7K53VqRi28JSujudzX1AJ1eAP62iq8XpX9XCLBz8N2vFWMitqL14NpZ5nShVThawPgWV14rZcdu2PeSD7`
+- Institutional live mint submit: `4dgpGjPbZ2kZPHyP2BKgQUuJoHPKLYE9wpyfEMJQaxqnwmVXhjkYuJuwf34bndwuUHBnpNPFwYUkPCxVfHWnRyBp`
 
 ## Preconditions
 - Solana CLI and SBF toolchain installed
@@ -56,17 +61,47 @@ The script auto-selects `initialize_protocol_config` or `update_protocol_config`
 ## Smoke Test
 Known-good runtime characteristics from the verified mint:
 - Proof length: `388 bytes`
-- Public witness length: `44 bytes`
+- Canonical verifier public witness length: `2220 bytes`
 - Example successful nullifier: `0x1de7cdac7601fee2ddbab63f4d2750f698a3e902d46df3f4c3c6003442971248`
 
 The prover server endpoints are:
 - `POST /prove`
 - `POST /mint-devnet`
 - `POST /prepare-devnet-mint`
+- `GET /compliance/state`
+- `POST /compliance/institution-status`
+- `POST /compliance/revoke-permit`
 
 For local bring-up:
 ```bash
-npm run server
+PROVER_PORT=3901 npm run server
+```
+
+If port `3001` is already occupied by another local project, point the frontend and smoke script at the dedicated port:
+
+```bash
+VITE_PROVER_SERVER_URL=http://127.0.0.1:3901 npm run dev --workspace=@solvus/frontend
+PROVER_SERVER_URL=http://127.0.0.1:3901 npm run stablehacks:smoke
+```
+
+## StableHacks Dress Rehearsal
+The institutional rehearsal now covers two paths:
+
+1. Control-plane rehearsal:
+   - prepare a pending institutional mint
+   - inspect live institution + permit state
+   - suspend the institution
+   - reactivate the institution
+   - revoke the permit
+2. Live mint rehearsal:
+   - prepare a fresh institutional mint for the operator wallet
+   - submit the partially signed transaction
+   - verify `minted_total`, `current_period_minted`, and permit `state=used`
+
+Run it with:
+
+```bash
+PROVER_SERVER_URL=http://127.0.0.1:3901 npm run stablehacks:smoke
 ```
 
 ## Operational Note: Compute Budget

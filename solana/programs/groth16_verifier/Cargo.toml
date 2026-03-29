@@ -9,3 +9,9 @@ name = "groth16_verifier"
 
 [dependencies]
 solana-program = { version = "2.3.0", default-features = false }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+  'cfg(target_os, values("solana"))',
+  'cfg(feature, values("custom-heap", "custom-panic"))',
+] }

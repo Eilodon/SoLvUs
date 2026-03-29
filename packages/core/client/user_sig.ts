@@ -15,9 +15,9 @@ const BITCOIN_SIGNED_MESSAGE_PREFIX = Uint8Array.from([
 
 export function buildMintMessage(solanaAddress: Hex, nonce: Hex | bigint): string {
   validateBytesLength(solanaAddress, 32, 'solana_address');
-  const nonceHex = typeof nonce === 'bigint' ? fieldToHex32(nonce) : normalizeHex(nonce);
-  validateBytesLength(nonceHex, 32, 'nonce');
-  return solanaAddress.slice(2) + nonceHex.slice(2);
+  const dlcContractIdHex = typeof nonce === 'bigint' ? fieldToHex32(nonce) : normalizeHex(nonce);
+  validateBytesLength(dlcContractIdHex, 32, 'dlc_contract_id');
+  return solanaAddress.slice(2) + dlcContractIdHex.slice(2);
 }
 
 export function buildMintMessagePreimage(solanaAddress: Hex, nonce: Hex | bigint): Uint8Array {

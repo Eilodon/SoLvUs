@@ -7,6 +7,17 @@ edition = "2021"
 crate-type = ["cdylib", "lib"]
 name = "liquidation"
 
+[features]
+default = []
+cpi = []
+
 [dependencies]
 anchor-lang = "0.31.1"
+anchor-spl = "0.31.1"
 solvus = { path = "../solvus", features = ["cpi"] }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+  'cfg(target_os, values("solana"))',
+  'cfg(feature, values("anchor-debug", "cpi", "custom-heap", "custom-panic", "no-entrypoint", "no-idl", "no-log-ix-name"))',
+] }

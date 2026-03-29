@@ -12,13 +12,12 @@ const SAMPLE_PROVER_INPUTS = {
   btc_data: 150000000,
   relayer_sig: '0xd8e07128dfdc95a9a3f59bc7001f2f3a48157a3e0f6e8eef28ffb535ef73e00e16387aa4124a7a6d1c868726286f7ff74d35d69058270d54650b23c04c4cd753',
   solana_address: '0x0d4f58e7d1b9f7e28a65194055b6ef8320a6fce8f6af02119df2584c1b0ff812',
-  nonce: '0x17261c1ec623c5854eee1bb12fe05d00231b3842a4da0f8f369eb0cb9318ddff',
+  dlc_contract_id: '0x0000000000000000000000000000000000000000000000000000000000000001',
   relayer_pubkey_x: '0x466d7fcae563e5cb09a0d1870bb580344804617879a14949cf22285f1bae3f27',
   relayer_pubkey_y: '0x6728176c3c6431f8eeda4538dc37c865e2784f3a9e77d044f33e407797e1278a',
   badge_type: 1,
   threshold: 100000000,
   is_upper_bound: false,
-  timestamp: 1762000000,
   nullifier_hash: '0x1d2d0ca2a3df433de3c2c294ec46b4cef6e9c6d37af62799469e9739675f8d3d',
 }
 
@@ -34,6 +33,19 @@ interface HealthResponse {
     groth16VerifierProgramId?: string
     zkusdMintAddress?: string
     zkusdMintDecimals?: number
+  }
+  [key: string]: unknown
+}
+
+interface ComplianceContext {
+  institutionIdHash: string
+  nullifierHash: string
+}
+
+interface PreparedMintResponse {
+  nullifier_hash?: string
+  permission_profile?: {
+    institution_id_hash?: string
   }
   [key: string]: unknown
 }
@@ -67,10 +79,19 @@ function App() {
   const [health, setHealth] = useState<HealthResponse | null>(null)
   const [payload, setPayload] = useState(JSON.stringify({ prover_inputs: SAMPLE_PROVER_INPUTS }, null, 2))
   const [zkusdAmount, setZkusdAmount] = useState('1000000')
+  const [institutionName, setInstitutionName] = useState('StableHacks Demo Treasury')
+  const [kybReference, setKybReference] = useState('KYB-APPROVED-DEMO')
+  const [travelRuleReference, setTravelRuleReference] = useState('TRAVEL-RULE-DEMO')
+  const [kytScore, setKytScore] = useState('24')
+  const [permitTtlSeconds, setPermitTtlSeconds] = useState('900')
+  const [dailyMintCap, setDailyMintCap] = useState('10000000')
+  const [lifetimeMintCap, setLifetimeMintCap] = useState('100000000')
   const [status, setStatus] = useState<'idle' | 'loading' | 'error' | 'done'>('idle')
   const [response, setResponse] = useState('')
   const [error, setError] = useState('')
   const [walletAddress, setWalletAddress] = useState('')
+  const [complianceContext, setComplianceContext] = useState<ComplianceContext | null>(null)
+  const [complianceState, setComplianceState] = useState('')
 
   const refreshHealth = async () => {
     const res = await fetch(`${PROVER_SERVER_URL}/health`)
@@ -85,6 +106,17 @@ function App() {
     refreshHealth().catch((err) => setError(err.message))
   }, [])
 
+  const buildPermissionedRequestPayload = () => ({
+    institution_name: institutionName,
+    kyb_reference: kybReference,
+    travel_rule_reference: travelRuleReference,
+    kyt_score: Number(kytScore),
+    permit_ttl_seconds: Number(permitTtlSeconds),
+    daily_mint_cap: Number(dailyMintCap),
+    lifetime_mint_cap: Number(lifetimeMintCap),
+    travel_rule_required: true,
+  })
+
   const connectPhantom = async (): Promise<PhantomProvider> => {
     const provider = window.solana
     if (!provider?.isPhantom) {
@@ -95,6 +127,49 @@ function App() {
     const address = connected.publicKey.toBase58()
     setWalletAddress(address)
     return provider
+  }
+
+  const syncComplianceState = async (context: ComplianceContext) => {
+    const params = new URLSearchParams({
+      institution_id_hash: context.institutionIdHash,
+      nullifier_hash: context.nullifierHash,
+    })
+    const res = await fetch(`${PROVER_SERVER_URL}/compliance/state?${params.toString()}`)
+    const body = await res.json()
+    if (!res.ok) {
+      throw new Error(body.message || body.error || 'Compliance state request failed')
+    }
+    setComplianceState(JSON.stringify(body, null, 2))
+  }
+
+  const captureComplianceContext = async (body: PreparedMintResponse, fallbackNullifierHash?: string) => {
+    const institutionIdHash = body.permission_profile?.institution_id_hash
+    const nullifierHash = body.nullifier_hash || fallbackNullifierHash
+    if (typeof institutionIdHash === 'string' && typeof nullifierHash === 'string') {
+      const context = { institutionIdHash, nullifierHash }
+      setComplianceContext(context)
+      await syncComplianceState(context)
+    }
+  }
+
+  const mutateComplianceState = async (path: string, payload: Record<string, unknown>) => {
+    if (!complianceContext) {
+      throw new Error('No compliance context loaded yet')
+    }
+
+    const res = await fetch(`${PROVER_SERVER_URL}${path}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+    const body = await res.json()
+    if (!res.ok) {
+      throw new Error(body.message || body.error || 'Compliance mutation failed')
+    }
+    await syncComplianceState(complianceContext)
+    setResponse(JSON.stringify(body, null, 2))
   }
 
   const submitProof = async () => {
@@ -143,6 +218,7 @@ function App() {
         body: JSON.stringify({
           prover_inputs: parsed.prover_inputs,
           zkusd_amount: Number(zkusdAmount),
+          ...buildPermissionedRequestPayload(),
         }),
       })
 
@@ -151,6 +227,7 @@ function App() {
         throw new Error(body.message || body.error || 'Devnet mint failed')
       }
 
+      await captureComplianceContext(body, parsed.prover_inputs?.nullifier_hash)
       setResponse(JSON.stringify(body, null, 2))
       setStatus('done')
     } catch (err) {
@@ -180,6 +257,7 @@ function App() {
         body: JSON.stringify({
           owner_pubkey: ownerPubkey,
           zkusd_amount: Number(zkusdAmount),
+          ...buildPermissionedRequestPayload(),
         }),
       })
 
@@ -191,6 +269,8 @@ function App() {
       if (prepared.prover_inputs) {
         setPayload(JSON.stringify({ prover_inputs: prepared.prover_inputs }, null, 2))
       }
+
+      await captureComplianceContext(prepared, prepared.prover_inputs?.nullifier_hash)
 
       if (prepared.cached || !prepared.serialized_transaction) {
         setResponse(JSON.stringify(prepared, null, 2))
@@ -227,6 +307,79 @@ function App() {
     }
   }
 
+  const suspendInstitution = async () => {
+    setStatus('loading')
+    setError('')
+    try {
+      if (!complianceContext) {
+        throw new Error('No institution loaded for suspend action')
+      }
+      await mutateComplianceState('/compliance/institution-status', {
+        institution_id_hash: complianceContext.institutionIdHash,
+        status: 'suspended',
+      })
+      setStatus('done')
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown suspend error'
+      setError(message)
+      setStatus('error')
+    }
+  }
+
+  const activateInstitution = async () => {
+    setStatus('loading')
+    setError('')
+    try {
+      if (!complianceContext) {
+        throw new Error('No institution loaded for activate action')
+      }
+      await mutateComplianceState('/compliance/institution-status', {
+        institution_id_hash: complianceContext.institutionIdHash,
+        status: 'active',
+      })
+      setStatus('done')
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown activate error'
+      setError(message)
+      setStatus('error')
+    }
+  }
+
+  const revokePermit = async () => {
+    setStatus('loading')
+    setError('')
+    try {
+      if (!complianceContext) {
+        throw new Error('No permit loaded for revoke action')
+      }
+      await mutateComplianceState('/compliance/revoke-permit', {
+        institution_id_hash: complianceContext.institutionIdHash,
+        nullifier_hash: complianceContext.nullifierHash,
+      })
+      setStatus('done')
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown revoke error'
+      setError(message)
+      setStatus('error')
+    }
+  }
+
+  const refreshAuditDashboard = async () => {
+    setStatus('loading')
+    setError('')
+    try {
+      if (!complianceContext) {
+        throw new Error('No compliance context loaded yet')
+      }
+      await syncComplianceState(complianceContext)
+      setStatus('done')
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown compliance refresh error'
+      setError(message)
+      setStatus('error')
+    }
+  }
+
   return (
     <div className="min-h-screen bg-stone-950 text-stone-100">
       <div className="mx-auto flex max-w-6xl flex-col gap-10 px-4 py-10 md:px-8">
@@ -234,9 +387,9 @@ function App() {
           <div className="flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
             <div className="max-w-2xl">
               <p className="text-xs font-semibold uppercase tracking-[0.35em] text-amber-300/80">Solvus Protocol</p>
-              <h1 className="mt-3 text-4xl font-black tracking-tight text-stone-50 md:text-5xl">Solana Runtime Scaffold</h1>
+              <h1 className="mt-3 text-4xl font-black tracking-tight text-stone-50 md:text-5xl">Institutional Issuance Vault Desk</h1>
               <p className="mt-4 text-sm leading-7 text-stone-300">
-                UI này bám flow Phase 1 trong docs: Relayer -&gt; Noir -&gt; Prover Server -&gt; Solana Anchor.
+                UI này demo flow permissioned mint cho regulated operator: compliance metadata -&gt; prover bundle -&gt; permit issuance -&gt; Solana mint.
               </p>
             </div>
             <div className="grid gap-3 rounded-3xl border border-amber-300/10 bg-stone-900/70 p-5 text-sm text-stone-300">
@@ -270,10 +423,10 @@ function App() {
 
         <section className="grid gap-4 md:grid-cols-4">
           {[
+            ['Policy', 'Institution profile, KYB hash, Travel Rule reference, capped permit window'],
             ['Identity', 'Compact secp256k1 user signature -> SHA-512 nullifier secret'],
-            ['Relayer', 'BTC state lookup + signed commitment bound to user pubkey'],
-            ['Prover', 'Noir inputs, deterministic nonce, cached /prove request'],
-            ['Solana', 'Anchor mint/burn/PendingBtcRelease state machine'],
+            ['Prover', 'Noir inputs, asset-bound nullifier, cached /prove request'],
+            ['Solana', 'Permissioned mint gate on top of Anchor vault state machine'],
           ].map(([title, desc]) => (
             <article key={title} className="rounded-[1.5rem] border border-stone-800 bg-stone-900/70 p-5">
               <p className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">{title}</p>
@@ -287,7 +440,7 @@ function App() {
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.25em] text-cyan-300/80">POST /prove</p>
-                <h2 className="mt-2 text-2xl font-bold text-stone-50">Prover Inputs Composer</h2>
+                <h2 className="mt-2 text-2xl font-bold text-stone-50">Permissioned Mint Composer</h2>
               </div>
               <div className="flex flex-wrap gap-3">
                 <button
@@ -317,7 +470,7 @@ function App() {
             </div>
 
             <p className="mt-4 text-sm leading-6 text-stone-400">
-              `Mint On Devnet` dùng ví CLI cục bộ. `Mint With Phantom` sẽ xin server chuẩn bị prover inputs mới, partial-sign fee payer, rồi để Phantom ký owner và broadcast.
+              `CLI Mint On Devnet` dùng ví admin/compliance cục bộ. `Mint With Phantom` sẽ để server cấp institution policy + permit trước, rồi Phantom ký với vai trò operator wallet.
             </p>
 
             <div className="mt-5 grid gap-3 rounded-[1.5rem] border border-stone-800 bg-stone-950/60 p-4 lg:grid-cols-[auto_auto_1fr] lg:items-center">
@@ -346,8 +499,67 @@ function App() {
                 </button>
               </div>
               <p className="text-xs leading-6 text-stone-500">
-                Server vẫn là fee payer. Phantom chỉ cần ký owner nên user không phải nạp devnet SOL để test UI flow.
+                Server vẫn là fee payer và compliance admin. Phantom chỉ ký operator wallet nên user không phải nạp devnet SOL để test policy-gated flow.
               </p>
+            </div>
+
+            <div className="mt-5 grid gap-3 rounded-[1.5rem] border border-amber-300/10 bg-stone-950/70 p-4 md:grid-cols-2">
+              <label className="grid gap-2 text-sm text-stone-300">
+                <span>Institution Label</span>
+                <input
+                  value={institutionName}
+                  onChange={(event) => setInstitutionName(event.target.value)}
+                  className="rounded-2xl border border-stone-700 bg-stone-900 px-4 py-3 text-sm text-stone-100 outline-none"
+                />
+              </label>
+              <label className="grid gap-2 text-sm text-stone-300">
+                <span>KYB Reference</span>
+                <input
+                  value={kybReference}
+                  onChange={(event) => setKybReference(event.target.value)}
+                  className="rounded-2xl border border-stone-700 bg-stone-900 px-4 py-3 text-sm text-stone-100 outline-none"
+                />
+              </label>
+              <label className="grid gap-2 text-sm text-stone-300">
+                <span>Travel Rule Reference</span>
+                <input
+                  value={travelRuleReference}
+                  onChange={(event) => setTravelRuleReference(event.target.value)}
+                  className="rounded-2xl border border-stone-700 bg-stone-900 px-4 py-3 text-sm text-stone-100 outline-none"
+                />
+              </label>
+              <label className="grid gap-2 text-sm text-stone-300">
+                <span>KYT Score</span>
+                <input
+                  value={kytScore}
+                  onChange={(event) => setKytScore(event.target.value)}
+                  className="rounded-2xl border border-stone-700 bg-stone-900 px-4 py-3 text-sm text-stone-100 outline-none"
+                />
+              </label>
+              <label className="grid gap-2 text-sm text-stone-300">
+                <span>Permit TTL Seconds</span>
+                <input
+                  value={permitTtlSeconds}
+                  onChange={(event) => setPermitTtlSeconds(event.target.value)}
+                  className="rounded-2xl border border-stone-700 bg-stone-900 px-4 py-3 text-sm text-stone-100 outline-none"
+                />
+              </label>
+              <label className="grid gap-2 text-sm text-stone-300">
+                <span>Daily Mint Cap</span>
+                <input
+                  value={dailyMintCap}
+                  onChange={(event) => setDailyMintCap(event.target.value)}
+                  className="rounded-2xl border border-stone-700 bg-stone-900 px-4 py-3 text-sm text-stone-100 outline-none"
+                />
+              </label>
+              <label className="grid gap-2 text-sm text-stone-300 md:col-span-2">
+                <span>Lifetime Mint Cap</span>
+                <input
+                  value={lifetimeMintCap}
+                  onChange={(event) => setLifetimeMintCap(event.target.value)}
+                  className="rounded-2xl border border-stone-700 bg-stone-900 px-4 py-3 text-sm text-stone-100 outline-none"
+                />
+              </label>
             </div>
 
             <textarea
@@ -359,6 +571,45 @@ function App() {
           </article>
 
           <aside className="grid gap-6">
+            <article className="rounded-[2rem] border border-amber-300/20 bg-amber-950/10 p-6">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.25em] text-amber-300/80">Compliance Audit</p>
+                <button
+                  onClick={refreshAuditDashboard}
+                  disabled={status === 'loading' || !complianceContext}
+                  className="rounded-full border border-amber-300/30 bg-amber-300/10 px-4 py-2 text-xs font-bold text-amber-100 transition hover:bg-amber-300/20 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Refresh
+                </button>
+              </div>
+              <div className="mt-4 flex flex-wrap gap-3">
+                <button
+                  onClick={suspendInstitution}
+                  disabled={status === 'loading' || !complianceContext}
+                  className="rounded-full bg-red-300 px-4 py-2 text-xs font-bold text-stone-950 transition hover:bg-red-200 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Suspend Institution
+                </button>
+                <button
+                  onClick={activateInstitution}
+                  disabled={status === 'loading' || !complianceContext}
+                  className="rounded-full bg-emerald-300 px-4 py-2 text-xs font-bold text-stone-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Reactivate
+                </button>
+                <button
+                  onClick={revokePermit}
+                  disabled={status === 'loading' || !complianceContext}
+                  className="rounded-full bg-amber-300 px-4 py-2 text-xs font-bold text-stone-950 transition hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Revoke Permit
+                </button>
+              </div>
+              <pre className="mt-4 min-h-[14rem] overflow-auto rounded-[1.25rem] bg-stone-950/80 p-4 text-xs leading-6 text-stone-200">
+                {complianceState || 'Prepare or mint once to load institution and permit state.'}
+              </pre>
+            </article>
+
             <article className="rounded-[2rem] border border-stone-800 bg-stone-900/70 p-6">
               <p className="text-xs font-semibold uppercase tracking-[0.25em] text-stone-500">Health</p>
               <pre className="mt-4 overflow-auto rounded-[1.25rem] bg-stone-950/80 p-4 text-xs leading-6 text-stone-200">

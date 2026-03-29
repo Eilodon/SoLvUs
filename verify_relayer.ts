@@ -17,7 +17,7 @@ async function run() {
   const commitment = await computeRelayerCommitment(
     fixture.user_pubkey_x,
     fixture.relayer_response.btc_data,
-    fixture.relayer_response.timestamp,
+    fixture.relayer_response.dlc_contract_id,
   );
   const relayerValid = secp256k1.verify(
     hexToBytes(fixture.relayer_response.signature),
@@ -27,7 +27,7 @@ async function run() {
   );
   const userValid = secp256k1.verify(
     hexToBytes(fixture.user_sig),
-    hashMintMessage(fixture.solana_address, fixture.nonce),
+    hashMintMessage(fixture.solana_address, fixture.dlc_contract_id),
     userPubkey,
     { prehash: false },
   );

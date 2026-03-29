@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use anchor_spl::token::{Mint, Token, TokenAccount};
 use solvus::cpi::accounts::LiquidateVaultCpi;
 use solvus::program::Solvus;
 use solvus::{ProtocolConfig, VaultState};
@@ -26,6 +27,10 @@ pub mod liquidation {
             protocol_config: ctx.accounts.protocol_config.to_account_info(),
             vault: ctx.accounts.vault.to_account_info(),
             liquidation_program: ctx.accounts.liquidation_program.to_account_info(),
+            // ADR-006: Liquidator repays debt in zkUSD, then the protocol burns it.
+            token_program: ctx.accounts.token_program.to_account_info(),
+            zkusd_mint: ctx.accounts.zkusd_mint.to_account_info(),
+            liquidator_zkusd_token_account: ctx.accounts.liquidator_zkusd_token_account.to_account_info(),
         };
 
         let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
@@ -53,6 +58,12 @@ pub struct LiquidateVault<'info> {
     pub solvus_program: Program<'info, Solvus>,
     /// CHECK: the self program info for authorization in solvus
     pub liquidation_program: AccountInfo<'info>,
+    // ADR-006: Liquidator repays debt in zkUSD, then the protocol burns it.
+    pub token_program: Program<'info, Token>,
+    #[account(mut)]
+    pub zkusd_mint: Account<'info, Mint>,
+    #[account(mut)]
+    pub liquidator_zkusd_token_account: Account<'info, TokenAccount>,
 }
 
 #[event]

@@ -1,8 +1,15 @@
 {
-  "mode": "artifact-verifier",
-  "artifact_path": "artifacts/devnet/groth16_fixture.json",
-  "proof_bytes": 5166,
-  "public_inputs_bytes": 288,
-  "proof_sha256": "0x71a5285d312f72254aa342e7ee2702484f885a88670c95258e74a39ad06608fe",
-  "public_inputs_sha256": "0x721732b880ebb49b013b0c9541662332a75dc583f0738429b243b69387c122d4"
+  "mode": "generated-artifact",
+  "proof_path": "circuits/target/solvus.proof",
+  "public_inputs_path": "circuits/target/solvus.pw",
+  "vk_path": "circuits/target/solvus.vk",
+  "verifier_program_path": "circuits/target/solvus.so",
+  "circuit_path": "circuits/target/solvus.json",
+  "proof_bytes": 388,
+  "public_inputs_bytes": 2220,
+  "proof_sha256": "0fd05961a777844ee2db1ef2d8628077523e01b0448f5f0b3448c2837c7608ac",
+  "public_inputs_sha256": "598857c3364d0947fda28690b236cb951571c6d831db7aabce7b282fdea9e588",
+  "vk_sha256": "9a01fbcd46c139690d7b3f62e153b6dc8683971b737cb1feee792447c9fe148a",
+  "verifier_program_sha256": "e78a56f07d4597fc0602a1640c183bacfb61a5494caff13355e566dbe466e587",
+  "circuit_sha256": "16e242b608890c14ef77166e5b829bb12eae18042ffdef33d637b1e425ffb655"
 }

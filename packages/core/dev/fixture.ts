@@ -1,9 +1,10 @@
+import { randomBytes } from 'crypto';
 import { secp256k1 } from '@noble/curves/secp256k1';
-import { BadgeType, Hex, ProverInputs, RelayerResponse } from '../contracts';
+import { BadgeType, BN254_PRIME, Hex, ProverInputs, RelayerResponse } from '../contracts';
 import { hashMintMessage } from '../client/user_sig';
 import { buildProverInputs } from '../prover/inputs';
 import { MockBitcoinIndexer, Secp256k1EnvRelayerSigner, fetchRelayerData } from '../relayer';
-import { bytesToHex, hexToBytes } from '../shared/utils';
+import { bytesToHex, fieldToHex32, hexToBytes } from '../shared/utils';
 
 export const DEV_USER_PRIVATE_KEY =
   '0x1111111111111111111111111111111111111111111111111111111111111111' as Hex;
@@ -15,7 +16,7 @@ export const DEV_BTC_ADDRESS = 'bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh';
 export const DEV_DLC_CONTRACT_ID =
   '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex;
 export const DEV_NULLIFIER_SECRET =
-  '0x3333333333333333333333333333333333333333333333333333333333333333' as Hex;
+  '0x0b785be5a226b8d22eb1633da6f8e988cd5e6618cd00e8d9faffa55cba1f1282' as Hex;
 export const DEV_BADGE_TYPE = BadgeType.Whale;
 
 export interface DevMintFixture {
@@ -99,6 +100,11 @@ async function buildDevMintFixture(params: BuildDevMintFixtureParams): Promise<D
   };
 }
 
+function generateRandomNullifierSecret(): Hex {
+  const raw = BigInt(`0x${randomBytes(32).toString('hex')}`) % BN254_PRIME;
+  return fieldToHex32(raw);
+}
+
 export async function createDevMintFixture(): Promise<DevMintFixture> {
   return buildDevMintFixture({
     user_private_key: DEV_USER_PRIVATE_KEY,
@@ -116,7 +122,7 @@ export async function createDynamicDevMintFixture(
 ): Promise<DevMintFixture> {
   const user_private_key =
     params.user_private_key ?? bytesToHex(secp256k1.utils.randomPrivateKey());
-  const nullifier_secret = params.nullifier_secret ?? DEV_NULLIFIER_SECRET;
+  const nullifier_secret = params.nullifier_secret ?? generateRandomNullifierSecret();
 
   return buildDevMintFixture({
     user_private_key,

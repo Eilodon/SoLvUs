@@ -7,8 +7,8 @@ import { promisify } from 'util';
 import {
   Hex,
   ProverInputs,
-  hexToTomlByteArray,
   normalizeHex,
+  serializeCircuitInputsToToml,
   serializeVerifierPublicInputs,
   stableJsonHash,
 } from '../core';
@@ -137,27 +137,6 @@ async function loadArtifactFromDisk(artifactPath: string): Promise<Groth16Artifa
   };
 }
 
-function proverInputsToToml(inputs: ProverInputs): string {
-  return [
-    `nullifier_secret = "${inputs.nullifier_secret}"`,
-    `pubkey_x = ${hexToTomlByteArray(inputs.pubkey_x)}`,
-    `pubkey_y = ${hexToTomlByteArray(inputs.pubkey_y)}`,
-    `user_sig = ${hexToTomlByteArray(inputs.user_sig)}`,
-    `btc_data = ${inputs.btc_data}`,
-    `relayer_sig = ${hexToTomlByteArray(inputs.relayer_sig)}`,
-    `solana_address = ${hexToTomlByteArray(inputs.solana_address)}`,
-    `nonce = "${inputs.nonce}"`,
-    `relayer_pubkey_x = ${hexToTomlByteArray(inputs.relayer_pubkey_x)}`,
-    `relayer_pubkey_y = ${hexToTomlByteArray(inputs.relayer_pubkey_y)}`,
-    `badge_type = ${inputs.badge_type}`,
-    `threshold = ${inputs.threshold}`,
-    `is_upper_bound = ${inputs.is_upper_bound}`,
-    `timestamp = ${inputs.timestamp}`,
-    `nullifier_hash = "${inputs.nullifier_hash}"`,
-    '',
-  ].join('\n');
-}
-
 async function assertSunspotArtifacts(): Promise<void> {
   for (const artifactPath of [CCS_PATH, PK_PATH, VK_PATH]) {
     try {
@@ -209,7 +188,7 @@ async function generateSunspotProofBundle(inputs: ProverInputs): Promise<Groth16
   const proverTomlPath = path.join(CIRCUITS_DIR, `${proverName}.toml`);
   const witnessPath = path.join(TARGET_DIR, `${witnessName}.gz`);
 
-  await fs.writeFile(proverTomlPath, proverInputsToToml(inputs), 'utf8');
+  await fs.writeFile(proverTomlPath, serializeCircuitInputsToToml(inputs), 'utf8');
 
   const { jobDir, baseName, proofPath, publicWitnessPath } = await createProofJobDir(jobId);
   try {

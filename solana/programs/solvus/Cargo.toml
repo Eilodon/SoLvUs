@@ -15,4 +15,10 @@ devnet = []
 [dependencies]
 anchor-lang = { version = "0.31.1", features = ["init-if-needed"] }
 anchor-spl = "0.31.1"
-pyth-sdk-solana = "0.10"
+pythnet-sdk = { version = "2.3.1", features = ["solana-program"] }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+  'cfg(target_os, values("solana"))',
+  'cfg(feature, values("anchor-debug", "custom-heap", "custom-panic", "no-entrypoint", "no-idl", "no-log-ix-name"))',
+] }

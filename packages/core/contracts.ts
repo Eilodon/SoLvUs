@@ -5,7 +5,10 @@ export const BN254_PRIME =
 
 export const ZKUSD_MINT_AUTHORITY_SEED = 'zkusd_mint_authority';
 export const PDA_NULLIFIER_SEED = 'nullifier_account';
+export const VERIFICATION_PAYLOAD_SEED = 'verification_payload';
 export const PROTOCOL_CONFIG_SEED = 'protocol_config';
+export const INSTITUTION_ACCOUNT_SEED = 'institution_account';
+export const COMPLIANCE_PERMIT_SEED = 'compliance_permit';
 export const BADGE_EXPIRY = 259200;
 export const TIMESTAMP_TOLERANCE = 300;
 export const RELAYER_SIG_EXPIRY = 3600;
@@ -68,6 +71,11 @@ export interface MintZkUSDInput {
   public_inputs: Hex;
   l1_refund_timelock: number;
   relayer_fee?: number;
+  institution_id_hash?: Hex;
+  kyb_ref_hash?: Hex;
+  travel_rule_ref_hash?: Hex;
+  permit_expires_at?: number;
+  kyt_score?: number;
 }
 
 export interface MintZkUSDOutput {
@@ -98,9 +106,22 @@ export interface ProtocolConfig {
   admin: Hex;
   groth16_verifier_program_id: string;
   oracle_price_feed_id: string;
+  liquidation_program_id?: string;
   authorized_relayer_pubkey_x: Hex;
   authorized_relayer_pubkey_y: Hex;
   updated_at: number;
+}
+
+export interface InstitutionPermissionProfile {
+  institution_id_hash: Hex;
+  institution_label: string;
+  kyb_ref_hash: Hex;
+  travel_rule_ref_hash: Hex;
+  permit_expires_at: number;
+  kyt_score: number;
+  daily_mint_cap: number;
+  lifetime_mint_cap: number;
+  travel_rule_required: boolean;
 }
 
 export interface ProofResponse {

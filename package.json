@@ -15,13 +15,15 @@
     "solana:check": "cargo check --manifest-path solana/Cargo.toml",
     "groth16:build-verifier": "bash scripts/build-real-verifier.sh",
     "solana:deploy:devnet": "bash scripts/deploy-devnet.sh",
-    "solana:init:protocol-config": "node scripts/init-protocol-config.mjs"
+    "solana:init:protocol-config": "node scripts/init-protocol-config.mjs",
+    "stablehacks:smoke": "node scripts/institutional-mint-smoke.mjs"
   },
   "dependencies": {
     "@aztec/bb.js": "0.87.9",
     "@noble/curves": "^1.4.0",
     "@noble/hashes": "^1.4.0",
     "@noir-lang/noir_js": "1.0.0-beta.3",
+    "@pythnetwork/pyth-solana-receiver": "0.12.0",
     "@solana/spl-token": "^0.4.14",
     "@solana/web3.js": "^1.98.4",
     "@types/body-parser": "^1.19.6",

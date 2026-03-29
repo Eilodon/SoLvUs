@@ -3,7 +3,7 @@ import { sha512 } from '@noble/hashes/sha512';
 import { mod } from '@noble/curves/abstract/modular';
 import { computeRelayerCommitment } from '../relayer/index';
 import { BadgeType, Hex, BN254_PRIME } from '../contracts';
-import { fieldToHex32, hexToBytes, poseidonHash } from '../shared/utils';
+import { bytes32BEToField, fieldToHex32, hexToBytes, poseidonHash } from '../shared/utils';
 
 function generateRandomHex(length: number): Hex {
   return bytesToHex(randomBytes(length)) as Hex;
@@ -17,7 +17,7 @@ async function computeNullifierHash(
   dlcContractId: Hex,
   badgeType: BadgeType
 ): Promise<bigint> {
-  const dlcBigInt = BigInt('0x' + dlcContractId);
+  const dlcBigInt = bytes32BEToField(dlcContractId);
   const hash = await poseidonHash([
     dlcBigInt,
     BigInt(badgeType),

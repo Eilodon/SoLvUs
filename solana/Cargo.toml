@@ -5,6 +5,3 @@ members = [
   "programs/groth16_verifier"
 ]
 resolver = "2"
-
-[lints.rust]
-unexpected_cfgs = "allow"

@@ -6,6 +6,19 @@ The repo no longer uses the old artifact-bound placeholder verifier. The active 
 Solana verifier from the Sunspot/Gnark artifacts generated for `circuits/target/solvus.vk`, and
 `solvus` forwards raw `proof || public_inputs` bytes to this program over CPI.
 
+The Rust crate in this folder is only a local compatibility harness for workspace checks. It now
+imports the generated verifier contract metadata from `solana/verifier_contract.rs` so the local
+source matches the active artifact boundary (`proof_bytes`, `public_inputs_bytes`, and hashes), and
+accepts the active raw `proof || public_inputs` payload used by `solvus` over CPI. It still does
+not perform real proof verification. The authoritative devnet verifier binary remains the generated
+artifact deployed from `circuits/target/solvus.so`.
+
+The artifact bridge is written to `artifacts/devnet/verifier_manifest.json` and regenerated with:
+
+```bash
+npm run sample:verifier-manifest
+```
+
 ## Current Devnet Deployment
 - Program id: `EVA4sSUJ2V3cXkT9fHpSHWbVnxBfPuUQUtRChxwg36Cn`
 - Verified upgrade on 2026-03-21:
@@ -22,6 +35,7 @@ This script:
 - patches the generated `gnark-solana` workspace for the Solana toolchain used here
 - runs `cargo update` for the pinned dependency version
 - calls `sunspot deploy` against `circuits/target/solvus.vk`
+- regenerates `artifacts/devnet/verifier_manifest.json` and `solana/verifier_contract.rs`
 
 Then deploy both programs with:
 

@@ -13,6 +13,7 @@ import {
   TransactionInstruction,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
+import { secp256k1 } from "@noble/curves/secp256k1";
 
 const rootDir = resolve(new URL(".", import.meta.url).pathname, "..");
 dotenv.config({ path: resolve(rootDir, "config/devnet.env") });
@@ -30,13 +31,30 @@ const verifierProgramId = new PublicKey(
 const oraclePriceFeedId = new PublicKey(
   process.env.ORACLE_PRICE_FEED_ID || "H6ARHf6YXhGYeQfUzQNGk6rDNnLBQKrenN712K4AQJEG",
 );
+const liquidationProgramId = new PublicKey(
+  process.env.LIQUIDATION_PROGRAM_ID || "FuNY9NZLWdegyDQHJiGjzsWcSeYG8s7nsAvaqUrk8HZt",
+);
+
+const defaultRelayerPrivateKey = process.env.RELAYER_SECP256K1_PRIVATE_KEY || `0x${"22".repeat(32)}`;
+const defaultRelayerPublicKey = secp256k1.getPublicKey(
+  Buffer.from(defaultRelayerPrivateKey.replace(/^0x/, ""), "hex"),
+  false,
+);
+const defaultRelayerPubkeyX = Buffer.from(defaultRelayerPublicKey.slice(1, 33));
+const defaultRelayerPubkeyY = Buffer.from(defaultRelayerPublicKey.slice(33, 65));
 
 const relayerPubkeyX = Buffer.from(
-  (process.env.RELAYER_SECP256K1_PUBLIC_KEY_X || "00".repeat(32)).replace(/^0x/, ""),
+  (
+    process.env.RELAYER_SECP256K1_PUBLIC_KEY_X ||
+    `0x${defaultRelayerPubkeyX.toString("hex")}`
+  ).replace(/^0x/, ""),
   "hex"
 );
 const relayerPubkeyY = Buffer.from(
-  (process.env.RELAYER_SECP256K1_PUBLIC_KEY_Y || "00".repeat(32)).replace(/^0x/, ""),
+  (
+    process.env.RELAYER_SECP256K1_PUBLIC_KEY_Y ||
+    `0x${defaultRelayerPubkeyY.toString("hex")}`
+  ).replace(/^0x/, ""),
   "hex"
 );
 
@@ -76,7 +94,7 @@ async function main() {
 
   const data = Buffer.concat([
     discriminator(instructionName),
-    encodePubkeys(verifierProgramId, oraclePriceFeedId),
+    encodePubkeys(verifierProgramId, oraclePriceFeedId, liquidationProgramId),
     relayerPubkeyX,
     relayerPubkeyY,
   ]);
@@ -93,6 +111,9 @@ async function main() {
   console.log(`protocol_config pda: ${protocolConfigPda.toBase58()}`);
   console.log(`verifier program: ${verifierProgramId.toBase58()}`);
   console.log(`oracle price feed: ${oraclePriceFeedId.toBase58()}`);
+  console.log(`liquidation program: ${liquidationProgramId.toBase58()}`);
+  console.log(`relayer pubkey x: 0x${relayerPubkeyX.toString("hex")}`);
+  console.log(`relayer pubkey y: 0x${relayerPubkeyY.toString("hex")}`);
   console.log(`instruction: ${instructionName}`);
 
   if (dryRun) {

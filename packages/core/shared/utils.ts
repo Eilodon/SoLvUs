@@ -43,6 +43,10 @@ export function bytesToHex(value: Uint8Array): Hex {
   return `0x${Buffer.from(value).toString('hex')}` as Hex;
 }
 
+export function hexToBigInt(value: string): bigint {
+  return BigInt(normalizeHex(value));
+}
+
 export function toHex64(value: bigint): string {
   return value.toString(16).padStart(64, '0');
 }
@@ -63,6 +67,15 @@ export function bytes32BEToField(value: string | Uint8Array): bigint {
   }
   const raw = BigInt(`0x${Buffer.from(bytes).toString('hex')}`);
   return ((raw % BN254_PRIME) + BN254_PRIME) % BN254_PRIME;
+}
+
+export function validateFieldElementHex(value: string, fieldName: string): void {
+  const raw = hexToBigInt(value);
+  if (raw >= BN254_PRIME) {
+    throw new Error(
+      `Invalid ${fieldName}: value exceeds BN254 field modulus (${BN254_PRIME.toString()})`,
+    );
+  }
 }
 
 export function u64ToBigEndian(value: number | bigint): Buffer {
@@ -141,5 +154,8 @@ export function validateBitcoinAddress(address: string): void {
 }
 
 export function hexToTomlByteArray(value: string): string {
+  if (value === undefined || value === null) {
+    throw new Error('Cannot convert undefined/null to TOML byte array');
+  }
   return `[${Array.from(hexToBytes(value)).join(', ')}]`;
 }

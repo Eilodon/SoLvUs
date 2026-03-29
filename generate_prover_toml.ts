@@ -1,32 +1,6 @@
 import { writeFileSync } from 'fs';
 import path from 'path';
-import { createDevMintFixture, hexToTomlByteArray } from './packages/core';
-
-function proverInputsToToml(inputs: Record<string, unknown>): string {
-  const arrayFields = new Set([
-    'solana_address',
-    'relayer_pubkey_x',
-    'relayer_pubkey_y',
-    'pubkey_x',
-    'pubkey_y',
-    'user_sig',
-    'relayer_sig',
-  ]);
-
-  let toml = '';
-  for (const [key, value] of Object.entries(inputs)) {
-    if (arrayFields.has(key)) {
-      toml += `${key} = ${hexToTomlByteArray(value as string)}\n`;
-      continue;
-    }
-    if (typeof value === 'boolean' || typeof value === 'number') {
-      toml += `${key} = ${value}\n`;
-      continue;
-    }
-    toml += `${key} = "${value}"\n`;
-  }
-  return toml;
-}
+import { createDevMintFixture, serializeCircuitInputsToToml } from './packages/core';
 
 async function run() {
   const fixture = await createDevMintFixture();
@@ -39,7 +13,7 @@ async function run() {
 
   const body = asJson
     ? JSON.stringify({ prover_inputs: fixture.prover_inputs }, null, 2)
-    : proverInputsToToml(fixture.prover_inputs as unknown as Record<string, unknown>);
+    : serializeCircuitInputsToToml(fixture.prover_inputs);
 
   if (outputPath) {
     writeFileSync(outputPath, body);
