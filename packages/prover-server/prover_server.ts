@@ -320,24 +320,55 @@ function buildTravelRuleRecord(
   };
 }
 
+// ADR-039: In-process mutex for audit journal write serialization.
+// Prevents JSONL corruption from concurrent writes in single-instance devnet.
+// For production multi-instance, use SQLite WAL or external message queue.
+let auditJournalMutex: Promise<void> = Promise.resolve();
+let auditJournalMutexResolve: (() => void) | null = null;
+
+function acquireAuditJournalLock(): Promise<void> {
+  return new Promise((resolve) => {
+    const previousResolve = auditJournalMutexResolve;
+    auditJournalMutex = auditJournalMutex.then(async () => {
+      if (previousResolve) previousResolve();
+      await new Promise<void>((r) => {
+        auditJournalMutexResolve = r;
+      });
+      resolve();
+    });
+  });
+}
+
+function releaseAuditJournalLock(): void {
+  if (auditJournalMutexResolve) {
+    auditJournalMutexResolve();
+    auditJournalMutexResolve = null;
+  }
+}
+
 async function appendAuditRecord(
   record: Omit<ComplianceAuditRecord, 'record_id' | 'recorded_at' | 'recorded_unix'>,
 ): Promise<ComplianceAuditRecord> {
-  const recordedUnix = Math.floor(Date.now() / 1000);
-  const persisted: ComplianceAuditRecord = {
-    ...record,
-    record_id: stableJsonHash({
+  await acquireAuditJournalLock();
+  try {
+    const recordedUnix = Math.floor(Date.now() / 1000);
+    const persisted: ComplianceAuditRecord = {
       ...record,
+      record_id: stableJsonHash({
+        ...record,
+        recorded_unix: recordedUnix,
+        seed: Math.random().toString(16).slice(2),
+      }),
+      recorded_at: new Date(recordedUnix * 1000).toISOString(),
       recorded_unix: recordedUnix,
-      seed: Math.random().toString(16).slice(2),
-    }),
-    recorded_at: new Date(recordedUnix * 1000).toISOString(),
-    recorded_unix: recordedUnix,
-  };
+    };
 
-  await fs.mkdir(path.dirname(AUDIT_JOURNAL_PATH), { recursive: true });
-  await fs.appendFile(AUDIT_JOURNAL_PATH, `${JSON.stringify(persisted)}\n`, 'utf8');
-  return persisted;
+    await fs.mkdir(path.dirname(AUDIT_JOURNAL_PATH), { recursive: true });
+    await fs.appendFile(AUDIT_JOURNAL_PATH, `${JSON.stringify(persisted)}\n`, 'utf8');
+    return persisted;
+  } finally {
+    releaseAuditJournalLock();
+  }
 }
 
 async function readAuditRecords(): Promise<ComplianceAuditRecord[]> {
@@ -662,10 +693,14 @@ app.post('/compliance/warm-oracle', requireApiKey, async (_req, res) => {
 app.post('/compliance/warm-proof', requireApiKey, async (req, res) => {
   try {
     const requestedAddress = req.body?.solana_address;
+    const requestedNullifierSecret = req.body?.nullifier_secret;
     const fixture = await createDynamicDevMintFixture({
       solana_address: typeof requestedAddress === 'string' && requestedAddress.length > 0
         ? requestedAddress as Hex
         : DEV_SOLANA_ADDRESS,
+      nullifier_secret: typeof requestedNullifierSecret === 'string' && requestedNullifierSecret.length > 0
+        ? requestedNullifierSecret as Hex
+        : undefined,
     });
     const bundle = await generateDevnetMintProofBundle(fixture.prover_inputs);
     const auditRecord = await appendAuditRecord({
@@ -1036,6 +1071,7 @@ app.post('/prepare-devnet-mint', requireApiKey, async (req, res) => {
     }
 
     const owner = new PublicKey(ownerPubkey);
+    const requestedNullifierSecret = req.body?.nullifier_secret;
     const permissionProfile = resolvePermissionProfile(
       req.body as Record<string, unknown> | undefined,
       owner.toBase58(),
@@ -1043,6 +1079,9 @@ app.post('/prepare-devnet-mint', requireApiKey, async (req, res) => {
     );
     const fixture = await createDynamicDevMintFixture({
       solana_address: bytesToHex(owner.toBytes()),
+      nullifier_secret: typeof requestedNullifierSecret === 'string' && requestedNullifierSecret.length > 0
+        ? requestedNullifierSecret as Hex
+        : undefined,
     });
     assertValidProverInputs(fixture.prover_inputs);
 

@@ -338,6 +338,14 @@ pub mod solvus {
         Ok(())
     }
 
+    /// Freeze or thaw a zkUSD holder's token account.
+    ///
+    /// **DESIGN NOTE (ADR-038):** This instruction deliberately skips the
+    /// `protocol_paused` check. Compliance admin must be able to freeze/thaw
+    /// holder accounts even during an emergency protocol pause — for example,
+    /// to respond to AML/sanctions events while the protocol is halted.
+    /// If the compliance_admin key is also compromised, that is a governance
+    /// failure outside the protocol's scope.
     pub fn set_zkusd_account_freeze(
         ctx: Context<SetZkUsdAccountFreeze>,
         frozen: bool,
@@ -438,6 +446,9 @@ pub mod solvus {
 
         institution.institution_id_hash = institution_id_hash;
         institution.approved_operator = approved_operator;
+        // Note: Suspended institutions remain Suspended when re-upserted.
+        // This allows compliance admin to update caps/operators without reactivating.
+        // To reactivate a Suspended institution, use set_institution_status explicitly.
         if institution.status == InstitutionStatus::Uninitialized as u8 {
             institution.status = InstitutionStatus::Active as u8;
         }
@@ -982,7 +993,7 @@ pub mod solvus {
         let vault = &mut ctx.accounts.vault;
         require!(
             vault.status == VaultStatus::AtRisk as u8 || vault.status == VaultStatus::Unhealthy as u8,
-            SolvusError::VaultNotLiquidatable
+            SolvusError::InvalidVaultStatusForGracePeriod
         );
         vault.status = VaultStatus::GracePeriod as u8;
         vault.grace_period_end = Some(now + GRACE_PERIOD_DURATION);
@@ -1113,7 +1124,7 @@ pub mod solvus {
             SolvusError::InvalidLiquidationAmount
         );
 
-        let now = Clock::get()?.unix_timestamp;
+        // now already resolved at line 1102 for preemption check
         vault.collateral_btc = vault
             .collateral_btc
             .checked_sub(collateral_seized)
@@ -2119,6 +2130,8 @@ pub enum SolvusError {
     InsufficientCollateral,
     #[msg("Vault is not in a liquidatable state")]
     VaultNotLiquidatable,
+    #[msg("Vault must be AtRisk or Unhealthy to enter grace period")]
+    InvalidVaultStatusForGracePeriod,
     #[msg("Caller is not an authorized liquidator")]
     UnauthorizedLiquidator,
     #[msg("Liquidation amount exceeds collateral")]

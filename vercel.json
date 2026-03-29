@@ -1,0 +1,33 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "packages/frontend",
+      "use": "@vercel/static-build"
+    },
+    {
+      "src": "packages/prover-server/prover_server.ts",
+      "use": "@vercel/node@3",
+      "config": {
+        "maxLambdaSize": "50mb"
+      }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "packages/prover-server/prover_server.ts"
+    },
+    {
+      "handle": "filesystem"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "packages/frontend/$1"
+    }
+  ],
+  "env": {
+    "SOLVUS_ENV": "devnet",
+    "PROVER_PORT": "3001"
+  }
+}

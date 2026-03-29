@@ -1,0 +1,80 @@
+FROM node:20-alpine AS base
+ENV NODE_ENV=production
+
+# ===========================================
+# Stage 1: Dependencies
+# ===========================================
+FROM base AS deps
+WORKDIR /app
+
+# Copy package files
+COPY package.json package-lock.json* ./
+COPY packages/frontend/package.json packages/frontend/
+
+# Install dependencies
+RUN npm ci --workspace=@solvus/frontend
+
+# ===========================================
+# Stage 2: Frontend Build
+# ===========================================
+FROM base AS builder
+WORKDIR /app
+
+# Copy package files and node_modules
+COPY package.json package-lock.json* ./
+COPY packages/frontend/package.json packages/frontend/
+COPY --from=deps /app/node_modules node_modules
+
+# Copy source code
+COPY packages/frontend/ packages/frontend/
+COPY packages/core/ packages/core/
+
+# Build
+RUN npm run build --workspace=@solvus/frontend
+
+# ===========================================
+# Stage 3: Production Runner
+# ===========================================
+FROM base AS runner
+WORKDIR /app
+
+# Install nginx for serving static files
+RUN apk add --no-cache nginx
+
+# Copy built assets
+COPY --from=builder /app/packages/frontend/dist /var/www/localhost
+
+# Copy nginx config
+RUN echo 'server { \
+    listen 80; \
+    server_name _; \
+    root /var/www/localhost; \
+    index index.html; \
+    location / { \
+        try_files $uri $uri/ /index.html; \
+    } \
+    location /api/ { \
+        proxy_pass http://prover-server:3001/; \
+        proxy_http_version 1.1; \
+        proxy_set_header Upgrade $http_upgrade; \
+        proxy_set_header Connection "upgrade"; \
+        proxy_set_header Host $host; \
+        proxy_set_header X-Real-IP $remote_addr; \
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; \
+    } \
+}' > /etc/nginx/http.d/default.conf
+
+# Create non-root user
+RUN addgroup -g 1001 -S solvus && \
+    adduser -S solvus -u 1001
+
+# Set ownership
+RUN chown -R solvus:solvus /var/www/localhost /var/log/nginx /etc/nginx
+RUN touch /var/run/nginx.pid && \
+    chown -R solvus:solvus /var/run/nginx.pid
+
+USER solvus
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]

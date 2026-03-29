@@ -1,0 +1,21 @@
+[[redirects]]
+  from = "/api/*"
+  to = "/api/:splat"
+  status = 200
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+[build]
+  command = "npm run build"
+  publish = "packages/frontend/dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+[[probe]]
+  path = "/health"
+  interval = 30
+  timeout = 10

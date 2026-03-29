@@ -331,12 +331,19 @@ function resolveMinOraclePriceE8(
 }
 
 function encodeMintZkUsdInstruction(input: MintZkUSDInput): Buffer {
+  if (input.min_btc_price_e8 === undefined || input.min_btc_price_e8 === 0) {
+    throw new Error(
+      'min_btc_price_e8 is required and must be > 0. ' +
+      'Call resolveMinOraclePriceE8() or pass an explicit oracle guard value. ' +
+      'Never pass 1 — that disables the BTC price protection entirely.'
+    );
+  }
   return Buffer.concat([
     discriminator('mint_zkusd'),
     Buffer.from(hexToBytes(input.nullifier_hash)),
     encodeU64LE(input.zkusd_amount),
     encodeI64LE(input.l1_refund_timelock),
-    encodeU64LE(input.min_btc_price_e8 ?? 1),
+    encodeU64LE(input.min_btc_price_e8),
   ]);
 }
 
@@ -1119,6 +1126,14 @@ async function buildMintTransaction(
   const tokenAccount = await ensureAssociatedTokenAccount(connection, payer, mint, owner);
   const existingNullifier = await connection.getAccountInfo(nullifierPda);
   if (existingNullifier) {
+    if (mintInput.min_btc_price_e8 === undefined || mintInput.min_btc_price_e8 === 0) {
+      throw new Error(
+        'min_btc_price_e8 is required for cached proof response. ' +
+        'The nullifier already exists — you must provide the oracle guard explicitly. ' +
+        'Call prepareMintOnDevnet() without cache (no existing nullifier) to auto-resolve, ' +
+        'or provide min_btc_price_e8 explicitly in the request.'
+      );
+    }
     return {
       transaction: new Transaction(),
       nullifierPda,
@@ -1130,7 +1145,7 @@ async function buildMintTransaction(
       verificationPayloadPda,
       cached: true,
       oracleRefreshWindow: null,
-      resolvedMinBtcPriceE8: mintInput.min_btc_price_e8 ?? 1,
+      resolvedMinBtcPriceE8: mintInput.min_btc_price_e8,
       permissionProfile,
       institutionUpsertSignature: undefined,
       compliancePermitSignature: undefined,

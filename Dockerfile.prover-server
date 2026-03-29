@@ -1,0 +1,54 @@
+FROM node:20-alpine AS base
+ENV NODE_ENV=production
+
+# ===========================================
+# Stage 1: Dependencies
+# ===========================================
+FROM base AS deps
+WORKDIR /app
+
+# Copy package files
+COPY package.json package-lock.json* ./
+COPY packages/core/package.json packages/core/
+COPY packages/prover-server/package.json packages/prover-server/
+
+# Install dependencies
+RUN npm ci --workspace=@solvus/core --workspace=@solvus/prover-server
+
+# ===========================================
+# Stage 2: Prover Server
+# ===========================================
+FROM base AS prover-server
+WORKDIR /app
+
+# Copy package files
+COPY package.json package-lock.json* ./
+COPY packages/core/package.json packages/core/
+COPY packages/prover-server/package.json packages/prover-server/
+
+# Install dependencies
+RUN npm ci --workspace=@solvus/core --workspace=@solvus/prover-server
+
+# Copy source code
+COPY packages/core/ packages/core/
+COPY packages/prover-server/ packages/prover-server/
+COPY config/ config/
+
+# Create non-root user
+RUN addgroup -g 1001 -S solvus && \
+    adduser -S solvus -u 1001
+
+# Set ownership
+RUN chown -R solvus:solvus /app
+
+USER solvus
+
+# Expose port
+EXPOSE 3001
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:3001/health || exit 1
+
+# Start command
+CMD ["npm", "run", "start", "--workspace=@solvus/prover-server"]
