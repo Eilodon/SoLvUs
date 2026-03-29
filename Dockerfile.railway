@@ -2,10 +2,19 @@
 FROM node:20-alpine AS builder
 WORKDIR /app
 
-# Copy only frontend package files
-COPY packages/frontend/package.json packages/frontend/
-COPY packages/core/package.json packages/core/
+# Copy all config files needed for build
 COPY package.json package-lock.json* ./
+COPY tsconfig.json ./
+COPY packages/frontend/package.json packages/frontend/
+COPY packages/frontend/tsconfig.json packages/frontend/
+COPY packages/frontend/vite.config.ts packages/frontend/
+COPY packages/frontend/index.html packages/frontend/
+COPY packages/core/package.json packages/core/
+COPY packages/core/tsconfig.json packages/core/
+
+# Copy source code
+COPY packages/frontend/src packages/frontend/src
+COPY packages/core/src packages/core/src
 
 # Install deps and build
 RUN npm ci --workspace=@solvus/frontend --workspace=@solvus/core && \
