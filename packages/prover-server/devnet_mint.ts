@@ -17,6 +17,7 @@ import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   createAssociatedTokenAccountIdempotentInstruction,
   createInitializeMintInstruction,
+  getAccount,
   getAssociatedTokenAddressSync,
   getMint,
   MINT_SIZE,
@@ -54,6 +55,7 @@ const PYTH_PUSH_ORACLE_PROGRAM_ID = 'pythWSnswVUd12oZpeFP8e9CVaEqJg25g1Vtc2biRsT
 const PYTH_RECEIVER_PROGRAM_ID = 'rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ';
 const WORMHOLE_PROGRAM_ID = 'HDwcJBJXjL9FpJ7UBsYBtaDjsBUhuLCUYoz3zr8SWWaQ';
 const PYTH_STALENESS_SECONDS = 60;
+const DEFAULT_ORACLE_PRICE_GUARD_BPS = 200;
 
 export interface DevnetMintResult {
   signature: string;
@@ -69,6 +71,9 @@ export interface DevnetMintResult {
   zkusd_token_account: string;
   owner: string;
   permission_profile: InstitutionPermissionProfile;
+  oracle_live_price_e8?: number;
+  oracle_min_price_e8?: number;
+  oracle_slippage_bps?: number;
 }
 
 export interface PreparedDevnetMintResult {
@@ -91,6 +96,17 @@ export interface PreparedDevnetMintResult {
   oracle_refreshed_at?: number;
   oracle_expires_at?: number;
   oracle_freshness_ttl_seconds?: number;
+  oracle_live_price_e8?: number;
+  oracle_min_price_e8?: number;
+  oracle_slippage_bps?: number;
+}
+
+export interface TokenAccountComplianceState {
+  token_account: string;
+  owner: string;
+  mint: string;
+  amount: string;
+  frozen: boolean;
 }
 
 export interface InstitutionAccountState {
@@ -128,6 +144,7 @@ export interface CompliancePermitState {
 export interface PermissionedStateSnapshot {
   institution: InstitutionAccountState | null;
   permit: CompliancePermitState | null;
+  holder: TokenAccountComplianceState | null;
 }
 
 function buildPlaceholderPermissionProfile(institutionIdHash: Hex): InstitutionPermissionProfile {
@@ -157,6 +174,8 @@ interface HermesLatestPriceFeed {
   vaa?: string;
   price?: {
     publish_time?: number;
+    price?: string | number;
+    expo?: number;
   };
 }
 
@@ -169,6 +188,7 @@ interface OracleRefreshWindow {
   publishTime: number | null;
   refreshedAt: number;
   expiresAt: number | null;
+  livePrice1e8: number | null;
 }
 
 interface PermissionedMintAccounts {
@@ -235,12 +255,78 @@ function encodeHex32(value: Hex, label: string): Buffer {
   return bytes;
 }
 
+function normalizeOracleNumeric(value: string | number | undefined, label: string): bigint | null {
+  if (value === undefined) {
+    return null;
+  }
+  if (typeof value === 'string') {
+    if (value.trim().length === 0) {
+      return null;
+    }
+    return BigInt(value);
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      throw new Error(`Invalid ${label}: ${value}`);
+    }
+    return BigInt(Math.trunc(value));
+  }
+  throw new Error(`Invalid ${label}: unsupported type`);
+}
+
+function scaleHermesPriceTo1e8(
+  price: string | number | undefined,
+  expo: number | undefined,
+): number | null {
+  const rawPrice = normalizeOracleNumeric(price, 'oracle price');
+  if (rawPrice === null) {
+    return null;
+  }
+  if (rawPrice <= 0n) {
+    throw new Error(`Invalid oracle price: ${rawPrice.toString()}`);
+  }
+
+  const exponent = typeof expo === 'number' ? expo : 0;
+  const adjustment = exponent + 8;
+  let scaled = rawPrice;
+  if (adjustment >= 0) {
+    scaled *= 10n ** BigInt(adjustment);
+  } else {
+    scaled /= 10n ** BigInt(-adjustment);
+  }
+
+  if (scaled <= 0n || scaled > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error(`Scaled oracle price is out of range: ${scaled.toString()}`);
+  }
+  return Number(scaled);
+}
+
+function resolveMinOraclePriceE8(
+  requestedMinBtcPriceE8: number | undefined,
+  livePrice1e8: number | null,
+): number {
+  if (requestedMinBtcPriceE8 !== undefined) {
+    if (!Number.isInteger(requestedMinBtcPriceE8) || requestedMinBtcPriceE8 <= 0) {
+      throw new Error('min_btc_price_e8 must be a positive integer when provided');
+    }
+    return requestedMinBtcPriceE8;
+  }
+  if (livePrice1e8 === null) {
+    throw new Error('Unable to derive oracle guard from the refreshed BTC/USD feed');
+  }
+  return Math.max(
+    1,
+    Math.floor((livePrice1e8 * (10_000 - DEFAULT_ORACLE_PRICE_GUARD_BPS)) / 10_000),
+  );
+}
+
 function encodeMintZkUsdInstruction(input: MintZkUSDInput): Buffer {
   return Buffer.concat([
     discriminator('mint_zkusd'),
     Buffer.from(hexToBytes(input.nullifier_hash)),
     encodeU64LE(input.zkusd_amount),
     encodeI64LE(input.l1_refund_timelock),
+    encodeU64LE(input.min_btc_price_e8 ?? 1),
   ]);
 }
 
@@ -290,6 +376,10 @@ function encodeSetInstitutionStatusInstruction(
 
 function encodeSetProtocolPauseInstruction(paused: boolean): Buffer {
   return Buffer.concat([discriminator('set_protocol_pause'), encodeBool(paused)]);
+}
+
+function encodeSetZkUsdAccountFreezeInstruction(frozen: boolean): Buffer {
+  return Buffer.concat([discriminator('set_zkusd_account_freeze'), encodeBool(frozen)]);
 }
 
 function encodeRevokeCompliancePermitInstruction(
@@ -377,7 +467,7 @@ async function ensureZkUsdMint(
       lamports,
       programId: TOKEN_PROGRAM_ID,
     }),
-    createInitializeMintInstruction(mint, decimals, mintAuthority, null, TOKEN_PROGRAM_ID),
+    createInitializeMintInstruction(mint, decimals, mintAuthority, mintAuthority, TOKEN_PROGRAM_ID),
   );
 
   await sendAndConfirmTransaction(connection, transaction, [payer, mintKeypair], {
@@ -758,6 +848,44 @@ async function fetchLatestHermesPriceFeed(feedId: string): Promise<HermesLatestP
   return latestFeed;
 }
 
+async function resolveKnownMintPublicKey(config: SolvusConfig): Promise<PublicKey | null> {
+  if (config.zkusdMintAddress) {
+    return new PublicKey(config.zkusdMintAddress);
+  }
+  if (existsSync(DEFAULT_MINT_KEYPAIR_PATH)) {
+    const mintKeypair = await readKeypair(DEFAULT_MINT_KEYPAIR_PATH);
+    return mintKeypair.publicKey;
+  }
+  return null;
+}
+
+async function fetchHolderTokenAccountState(
+  connection: Connection,
+  mint: PublicKey,
+  owner: PublicKey,
+): Promise<TokenAccountComplianceState | null> {
+  const tokenAccount = getAssociatedTokenAddressSync(
+    mint,
+    owner,
+    false,
+    TOKEN_PROGRAM_ID,
+    ASSOCIATED_TOKEN_PROGRAM_ID,
+  );
+  const tokenAccountInfo = await connection.getAccountInfo(tokenAccount, 'confirmed');
+  if (!tokenAccountInfo) {
+    return null;
+  }
+
+  const account = await getAccount(connection, tokenAccount, 'confirmed', TOKEN_PROGRAM_ID);
+  return {
+    token_account: tokenAccount.toBase58(),
+    owner: owner.toBase58(),
+    mint: mint.toBase58(),
+    amount: account.amount.toString(),
+    frozen: account.isFrozen,
+  };
+}
+
 function getTreasuryPda(treasuryId: number, receiverProgramId: PublicKey): PublicKey {
   return PublicKey.findProgramAddressSync(
     [Buffer.from('treasury'), Buffer.from([treasuryId])],
@@ -904,6 +1032,7 @@ async function postFreshOraclePriceUpdate(
     publishTime,
     refreshedAt,
     expiresAt: publishTime === null ? null : publishTime + PYTH_STALENESS_SECONDS,
+    livePrice1e8: scaleHermesPriceTo1e8(latestFeed.price?.price, latestFeed.price?.expo),
   };
 }
 
@@ -926,6 +1055,7 @@ async function buildMintTransaction(
   verificationPayloadPda: PublicKey;
   cached: boolean;
   oracleRefreshWindow: OracleRefreshWindow | null;
+  resolvedMinBtcPriceE8: number;
   permissionProfile: InstitutionPermissionProfile;
 }> {
   const programId = new PublicKey(config.solvusProgramId!);
@@ -979,6 +1109,7 @@ async function buildMintTransaction(
       verificationPayloadPda,
       cached: true,
       oracleRefreshWindow: null,
+      resolvedMinBtcPriceE8: mintInput.min_btc_price_e8 ?? 1,
       permissionProfile,
     };
   }
@@ -998,7 +1129,14 @@ async function buildMintTransaction(
     oracleRefreshWindow = await postFreshOraclePriceUpdate(connection, payer);
   }
 
-  const instructionData = encodeMintZkUsdInstruction(mintInput);
+  const resolvedMinBtcPriceE8 = resolveMinOraclePriceE8(
+    mintInput.min_btc_price_e8,
+    oracleRefreshWindow?.livePrice1e8 ?? null,
+  );
+  const instructionData = encodeMintZkUsdInstruction({
+    ...mintInput,
+    min_btc_price_e8: resolvedMinBtcPriceE8,
+  });
   const instruction = new TransactionInstruction({
     programId,
     keys: [
@@ -1042,6 +1180,7 @@ async function buildMintTransaction(
     verificationPayloadPda,
     cached: false,
     oracleRefreshWindow,
+    resolvedMinBtcPriceE8,
     permissionProfile,
   };
 }
@@ -1096,6 +1235,8 @@ export async function mintOnDevnet(
     mint,
     tokenAccount,
     cached,
+    oracleRefreshWindow,
+    resolvedMinBtcPriceE8,
   } = await buildMintTransaction(
     config,
     connection,
@@ -1120,6 +1261,8 @@ export async function mintOnDevnet(
       zkusd_token_account: tokenAccount.toBase58(),
       owner: payer.publicKey.toBase58(),
       permission_profile: permissionProfile,
+      oracle_min_price_e8: mintInput.min_btc_price_e8,
+      oracle_slippage_bps: DEFAULT_ORACLE_PRICE_GUARD_BPS,
     };
   }
 
@@ -1142,6 +1285,9 @@ export async function mintOnDevnet(
     zkusd_token_account: tokenAccount.toBase58(),
     owner: payer.publicKey.toBase58(),
     permission_profile: permissionProfile,
+    oracle_live_price_e8: oracleRefreshWindow?.livePrice1e8 ?? undefined,
+    oracle_min_price_e8: resolvedMinBtcPriceE8,
+    oracle_slippage_bps: DEFAULT_ORACLE_PRICE_GUARD_BPS,
   };
 }
 
@@ -1180,6 +1326,7 @@ export async function prepareMintOnDevnet(
     tokenAccount,
     cached,
     oracleRefreshWindow,
+    resolvedMinBtcPriceE8,
   } = await buildMintTransaction(
     config,
     connection,
@@ -1206,6 +1353,8 @@ export async function prepareMintOnDevnet(
       fee_payer: payer.publicKey.toBase58(),
       cluster_url: config.solanaClusterUrl,
       permission_profile: permissionProfile,
+      oracle_min_price_e8: mintInput.min_btc_price_e8,
+      oracle_slippage_bps: DEFAULT_ORACLE_PRICE_GUARD_BPS,
     };
   }
 
@@ -1236,6 +1385,9 @@ export async function prepareMintOnDevnet(
     oracle_refreshed_at: oracleRefreshWindow?.refreshedAt ?? undefined,
     oracle_expires_at: oracleRefreshWindow?.expiresAt ?? undefined,
     oracle_freshness_ttl_seconds: oracleRefreshWindow ? PYTH_STALENESS_SECONDS : undefined,
+    oracle_live_price_e8: oracleRefreshWindow?.livePrice1e8 ?? undefined,
+    oracle_min_price_e8: resolvedMinBtcPriceE8,
+    oracle_slippage_bps: DEFAULT_ORACLE_PRICE_GUARD_BPS,
   };
 }
 
@@ -1265,16 +1417,31 @@ export async function fetchPermissionedState(
     connection.getAccountInfo(accounts.institutionPda),
     connection.getAccountInfo(accounts.compliancePermitPda),
   ]);
+  const institution = institutionInfo ? decodeInstitutionAccount(accounts.institutionPda, institutionInfo.data) : null;
+  const permit = permitInfo ? decodeCompliancePermit(accounts.compliancePermitPda, permitInfo.data) : null;
+  const knownMint = institution ? await resolveKnownMintPublicKey(config) : null;
+  const holder = institution && knownMint
+    ? await fetchHolderTokenAccountState(
+        connection,
+        knownMint,
+        new PublicKey(institution.approved_operator),
+      )
+    : null;
 
   return {
-    institution: institutionInfo ? decodeInstitutionAccount(accounts.institutionPda, institutionInfo.data) : null,
-    permit: permitInfo ? decodeCompliancePermit(accounts.compliancePermitPda, permitInfo.data) : null,
+    institution,
+    permit,
+    holder,
   };
 }
 
 async function sendAdminInstruction(
   config: SolvusConfig,
-  buildInstruction: (programId: PublicKey, protocolConfigPda: PublicKey, payer: Keypair) => TransactionInstruction,
+  buildInstruction: (
+    programId: PublicKey,
+    protocolConfigPda: PublicKey,
+    payer: Keypair,
+  ) => Promise<TransactionInstruction> | TransactionInstruction,
 ): Promise<string> {
   if (!config.solvusProgramId) {
     throw new Error('Missing SOLVUS_PROGRAM_ID');
@@ -1291,7 +1458,7 @@ async function sendAdminInstruction(
     programId,
   );
 
-  const transaction = new Transaction().add(buildInstruction(programId, protocolConfigPda, payer));
+  const transaction = new Transaction().add(await buildInstruction(programId, protocolConfigPda, payer));
   return sendAndConfirmTransaction(connection, transaction, [payer], {
     commitment: 'confirmed',
   });
@@ -1361,6 +1528,45 @@ export async function setProtocolPauseOnDevnet(
         { pubkey: protocolConfigPda, isSigner: false, isWritable: true },
       ],
       data: encodeSetProtocolPauseInstruction(paused),
+    });
+  });
+}
+
+export async function setZkUsdAccountFreezeOnDevnet(
+  config: SolvusConfig,
+  ownerAddress: string,
+  frozen: boolean,
+): Promise<string> {
+  const knownMint = await resolveKnownMintPublicKey(config);
+  if (!knownMint) {
+    throw new Error('Unable to resolve zkUSD mint address for freeze control');
+  }
+
+  return sendAdminInstruction(config, async (programId, protocolConfigPda, payer) => {
+    const owner = new PublicKey(ownerAddress);
+    const tokenAccount = getAssociatedTokenAddressSync(
+      knownMint,
+      owner,
+      false,
+      TOKEN_PROGRAM_ID,
+      ASSOCIATED_TOKEN_PROGRAM_ID,
+    );
+    const [mintAuthorityPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from(ZKUSD_MINT_AUTHORITY_SEED, 'utf8')],
+      programId,
+    );
+
+    return new TransactionInstruction({
+      programId,
+      keys: [
+        { pubkey: payer.publicKey, isSigner: true, isWritable: true },
+        { pubkey: protocolConfigPda, isSigner: false, isWritable: false },
+        { pubkey: knownMint, isSigner: false, isWritable: true },
+        { pubkey: tokenAccount, isSigner: false, isWritable: true },
+        { pubkey: mintAuthorityPda, isSigner: false, isWritable: false },
+        { pubkey: new PublicKey(SPL_TOKEN_PROGRAM_ID), isSigner: false, isWritable: false },
+      ],
+      data: encodeSetZkUsdAccountFreezeInstruction(frozen),
     });
   });
 }

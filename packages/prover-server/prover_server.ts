@@ -34,6 +34,7 @@ import {
   revokeCompliancePermitOnDevnet,
   setProtocolPauseOnDevnet,
   setInstitutionStatusOnDevnet,
+  setZkUsdAccountFreezeOnDevnet,
 } from './devnet_mint';
 import {
   generateDevnetMintProofBundle,
@@ -193,6 +194,16 @@ function buildStructuredAuditHash(label: string, fields: Record<string, string |
 
 function readPositiveInteger(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+function readOptionalPositiveInteger(value: unknown, fieldName: string): number | undefined {
+  if (value === undefined || value === null || value === '') {
+    return undefined;
+  }
+  if (typeof value === 'number' && Number.isInteger(value) && value > 0) {
+    return value;
+  }
+  throw new Error(`${fieldName} must be a positive integer when provided`);
 }
 
 function resolvePermissionProfile(
@@ -387,6 +398,54 @@ app.post('/compliance/revoke-permit', requireApiKey, async (req, res) => {
   }
 });
 
+app.post('/compliance/freeze-holder', requireApiKey, async (req, res) => {
+  try {
+    const ownerPubkey = req.body?.owner_pubkey;
+    if (typeof ownerPubkey !== 'string' || ownerPubkey.length === 0) {
+      return res.status(400).json({ error: 'owner_pubkey is required' });
+    }
+
+    const signature = await setZkUsdAccountFreezeOnDevnet(config, ownerPubkey, true);
+    return res.json({
+      success: true,
+      owner_pubkey: ownerPubkey,
+      frozen: true,
+      signature,
+    });
+  } catch (error: any) {
+    const message = error instanceof Error ? error.message : 'Unknown holder freeze failure';
+    return res.status(500).json({
+      code: 'ERROR_HOLDER_FREEZE_FAILED',
+      error: 'Failed to freeze holder account',
+      message,
+    });
+  }
+});
+
+app.post('/compliance/thaw-holder', requireApiKey, async (req, res) => {
+  try {
+    const ownerPubkey = req.body?.owner_pubkey;
+    if (typeof ownerPubkey !== 'string' || ownerPubkey.length === 0) {
+      return res.status(400).json({ error: 'owner_pubkey is required' });
+    }
+
+    const signature = await setZkUsdAccountFreezeOnDevnet(config, ownerPubkey, false);
+    return res.json({
+      success: true,
+      owner_pubkey: ownerPubkey,
+      frozen: false,
+      signature,
+    });
+  } catch (error: any) {
+    const message = error instanceof Error ? error.message : 'Unknown holder thaw failure';
+    return res.status(500).json({
+      code: 'ERROR_HOLDER_THAW_FAILED',
+      error: 'Failed to thaw holder account',
+      message,
+    });
+  }
+});
+
 app.post('/protocol/pause', requireApiKey, async (req, res) => {
   try {
     const paused = Boolean(req.body?.paused);
@@ -468,6 +527,7 @@ app.post('/mint-devnet', requireApiKey, async (req, res) => {
     const proverInputs = req.body?.prover_inputs as ProverInputs | undefined;
     const zkusdAmount = Number(req.body?.zkusd_amount ?? 1_000_000);
     const l1RefundTimelock = resolveL1RefundTimelock(req.body?.l1_refund_timelock);
+    const minBtcPriceE8 = readOptionalPositiveInteger(req.body?.min_btc_price_e8, 'min_btc_price_e8');
     if (!proverInputs) {
       return res.status(400).json({ error: 'Missing prover_inputs' });
     }
@@ -488,6 +548,7 @@ app.post('/mint-devnet', requireApiKey, async (req, res) => {
       proof: bundle.proof,
       public_inputs: bundle.public_inputs,
       l1_refund_timelock: l1RefundTimelock,
+      min_btc_price_e8: minBtcPriceE8,
     }, permissionProfile);
 
     return res.json({
@@ -512,6 +573,7 @@ app.post('/prepare-devnet-mint', requireApiKey, async (req, res) => {
     const ownerPubkey = req.body?.owner_pubkey;
     const zkusdAmount = Number(req.body?.zkusd_amount ?? 1_000_000);
     const l1RefundTimelock = resolveL1RefundTimelock(req.body?.l1_refund_timelock);
+    const minBtcPriceE8 = readOptionalPositiveInteger(req.body?.min_btc_price_e8, 'min_btc_price_e8');
     if (typeof ownerPubkey !== 'string' || ownerPubkey.length === 0) {
       return res.status(400).json({ error: 'Missing owner_pubkey' });
     }
@@ -537,6 +599,7 @@ app.post('/prepare-devnet-mint', requireApiKey, async (req, res) => {
       proof: bundle.proof,
       public_inputs: bundle.public_inputs,
       l1_refund_timelock: l1RefundTimelock,
+      min_btc_price_e8: minBtcPriceE8,
     }, permissionProfile);
 
     return res.json({

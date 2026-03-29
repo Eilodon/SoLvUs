@@ -91,6 +91,7 @@ function App() {
   const [health, setHealth] = useState<HealthResponse | null>(null)
   const [payload, setPayload] = useState(JSON.stringify({ prover_inputs: SAMPLE_PROVER_INPUTS }, null, 2))
   const [zkusdAmount, setZkusdAmount] = useState('1000000')
+  const [minBtcPriceE8, setMinBtcPriceE8] = useState('')
   const [institutionName, setInstitutionName] = useState('StableHacks Demo Treasury')
   const [kybReference, setKybReference] = useState('KYB-APPROVED-DEMO')
   const [travelRuleReference, setTravelRuleReference] = useState('TRAVEL-RULE-DEMO')
@@ -127,7 +128,23 @@ function App() {
     daily_mint_cap: Number(dailyMintCap),
     lifetime_mint_cap: Number(lifetimeMintCap),
     travel_rule_required: true,
+    ...(minBtcPriceE8.trim().length > 0 ? { min_btc_price_e8: Number(minBtcPriceE8) } : {}),
   })
+
+  const resolveComplianceOwner = (): string => {
+    if (!complianceState) {
+      throw new Error('No compliance state loaded yet')
+    }
+    const parsed = JSON.parse(complianceState) as {
+      holder?: { owner?: string }
+      institution?: { approved_operator?: string }
+    }
+    const owner = parsed.holder?.owner || parsed.institution?.approved_operator
+    if (typeof owner !== 'string' || owner.length === 0) {
+      throw new Error('No holder owner found in compliance snapshot')
+    }
+    return owner
+  }
 
   const connectPhantom = async (): Promise<PhantomProvider> => {
     const provider = window.solana
@@ -389,6 +406,36 @@ function App() {
     }
   }
 
+  const freezeHolder = async () => {
+    setStatus('loading')
+    setError('')
+    try {
+      await mutateComplianceState('/compliance/freeze-holder', {
+        owner_pubkey: resolveComplianceOwner(),
+      })
+      setStatus('done')
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown holder freeze error'
+      setError(message)
+      setStatus('error')
+    }
+  }
+
+  const thawHolder = async () => {
+    setStatus('loading')
+    setError('')
+    try {
+      await mutateComplianceState('/compliance/thaw-holder', {
+        owner_pubkey: resolveComplianceOwner(),
+      })
+      setStatus('done')
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown holder thaw error'
+      setError(message)
+      setStatus('error')
+    }
+  }
+
   const pauseProtocol = async () => {
     setStatus('loading')
     setError('')
@@ -541,6 +588,15 @@ function App() {
                   className="w-36 rounded-full border border-stone-700 bg-stone-900 px-4 py-2 font-mono text-xs text-stone-100 outline-none"
                 />
               </label>
+              <label className="flex items-center gap-3 text-sm text-stone-300">
+                <span>Min BTC Price 1e8</span>
+                <input
+                  value={minBtcPriceE8}
+                  onChange={(event) => setMinBtcPriceE8(event.target.value)}
+                  placeholder="auto from oracle"
+                  className="w-40 rounded-full border border-stone-700 bg-stone-900 px-4 py-2 font-mono text-xs text-stone-100 outline-none"
+                />
+              </label>
               <div className="flex flex-wrap gap-3">
                 <button
                   onClick={mintOnDevnet}
@@ -669,6 +725,20 @@ function App() {
                   className="rounded-full bg-amber-300 px-4 py-2 text-xs font-bold text-stone-950 transition hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Revoke Permit
+                </button>
+                <button
+                  onClick={freezeHolder}
+                  disabled={status === 'loading' || !complianceContext}
+                  className="rounded-full bg-rose-300 px-4 py-2 text-xs font-bold text-stone-950 transition hover:bg-rose-200 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Freeze Holder
+                </button>
+                <button
+                  onClick={thawHolder}
+                  disabled={status === 'loading' || !complianceContext}
+                  className="rounded-full bg-lime-300 px-4 py-2 text-xs font-bold text-stone-950 transition hover:bg-lime-200 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Thaw Holder
                 </button>
                 <button
                   onClick={pauseProtocol}

@@ -70,6 +70,7 @@ export interface MintZkUSDInput {
   proof: Hex;
   public_inputs: Hex;
   l1_refund_timelock: number;
+  min_btc_price_e8?: number;
   relayer_fee?: number;
   institution_id_hash?: Hex;
   kyb_ref_hash?: Hex;

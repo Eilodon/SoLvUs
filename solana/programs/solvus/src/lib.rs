@@ -1,9 +1,10 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::Instruction;
+use anchor_lang::solana_program::program_option::COption;
 use anchor_lang::solana_program::program::invoke;
 use anchor_lang::solana_program::pubkey;
 use anchor_lang::system_program::{self, CreateAccount};
-use anchor_spl::token::{self, Burn, Mint, MintTo, Token, TokenAccount};
+use anchor_spl::token::{self, Burn, FreezeAccount, Mint, MintTo, ThawAccount, Token, TokenAccount};
 use pythnet_sdk::messages::PriceFeedMessage;
 
 #[allow(dead_code)]
@@ -337,6 +338,69 @@ pub mod solvus {
         Ok(())
     }
 
+    pub fn set_zkusd_account_freeze(
+        ctx: Context<SetZkUsdAccountFreeze>,
+        frozen: bool,
+    ) -> Result<()> {
+        require_keys_eq!(
+            ctx.accounts.protocol_config.compliance_admin,
+            ctx.accounts.compliance_admin.key(),
+            SolvusError::Unauthorized
+        );
+        require_keys_eq!(
+            ctx.accounts.token_program.key(),
+            SPL_TOKEN_PROGRAM_ID,
+            SolvusError::InvalidTokenProgram
+        );
+        require_keys_eq!(
+            ctx.accounts.zkusd_token_account.mint,
+            ctx.accounts.zkusd_mint.key(),
+            SolvusError::InvalidZkUsdTokenAccount
+        );
+        require!(
+            ctx.accounts.zkusd_mint.freeze_authority
+                == COption::Some(ctx.accounts.mint_authority.key()),
+            SolvusError::MintFreezeAuthorityNotConfigured
+        );
+
+        let signer_seeds: &[&[u8]] = &[ZKUSD_MINT_AUTHORITY_SEED, &[ctx.bumps.mint_authority]];
+        if frozen {
+            token::freeze_account(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    FreezeAccount {
+                        account: ctx.accounts.zkusd_token_account.to_account_info(),
+                        mint: ctx.accounts.zkusd_mint.to_account_info(),
+                        authority: ctx.accounts.mint_authority.to_account_info(),
+                    },
+                    &[signer_seeds],
+                ),
+            )?;
+        } else {
+            token::thaw_account(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    ThawAccount {
+                        account: ctx.accounts.zkusd_token_account.to_account_info(),
+                        mint: ctx.accounts.zkusd_mint.to_account_info(),
+                        authority: ctx.accounts.mint_authority.to_account_info(),
+                    },
+                    &[signer_seeds],
+                ),
+            )?;
+        }
+
+        emit!(ZkUsdAccountFreezeChangedEvent {
+            compliance_admin: ctx.accounts.compliance_admin.key(),
+            token_account: ctx.accounts.zkusd_token_account.key(),
+            token_owner: ctx.accounts.zkusd_token_account.owner,
+            frozen,
+            timestamp: Clock::get()?.unix_timestamp,
+        });
+
+        Ok(())
+    }
+
     pub fn upsert_institution(
         ctx: Context<UpsertInstitution>,
         institution_id_hash: [u8; 32],
@@ -549,6 +613,7 @@ pub mod solvus {
         nullifier_hash: [u8; 32],
         zkusd_amount: u64,
         l1_refund_timelock: i64,
+        min_btc_price_e8: u64,
     ) -> Result<()> {
         require!(
             !ctx.accounts.protocol_config.protocol_paused,
@@ -592,6 +657,10 @@ pub mod solvus {
             &ctx.accounts.oracle_price_feed,
             ctx.accounts.protocol_config.oracle_max_staleness_seconds,
         )?;
+        require!(
+            btc_price >= min_btc_price_e8,
+            SolvusError::OraclePriceBelowGuard
+        );
 
         let (btc_data, dlc_contract_id) = assert_canonical_public_inputs(
             &nullifier_hash,
@@ -1455,6 +1524,21 @@ pub struct SetProtocolPause<'info> {
 }
 
 #[derive(Accounts)]
+pub struct SetZkUsdAccountFreeze<'info> {
+    #[account(mut)]
+    pub compliance_admin: Signer<'info>,
+    #[account(seeds = [PROTOCOL_CONFIG_SEED], bump)]
+    pub protocol_config: Account<'info, ProtocolConfig>,
+    #[account(mut)]
+    pub zkusd_mint: Account<'info, Mint>,
+    #[account(mut)]
+    pub zkusd_token_account: Account<'info, TokenAccount>,
+    #[account(seeds = [ZKUSD_MINT_AUTHORITY_SEED], bump)]
+    pub mint_authority: UncheckedAccount<'info>,
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
 #[instruction(institution_id_hash: [u8; 32])]
 pub struct UpsertInstitution<'info> {
     #[account(mut)]
@@ -1968,6 +2052,15 @@ pub struct ProtocolPauseChangedEvent {
 }
 
 #[event]
+pub struct ZkUsdAccountFreezeChangedEvent {
+    pub compliance_admin: Pubkey,
+    pub token_account: Pubkey,
+    pub token_owner: Pubkey,
+    pub frozen: bool,
+    pub timestamp: i64,
+}
+
+#[event]
 pub struct ProtocolConfigMigratedEvent {
     pub legacy_data_len: u32,
     pub protocol_admin: Pubkey,
@@ -2090,12 +2183,16 @@ pub enum SolvusError {
     InvalidOracleStaleness,
     #[msg("Protocol is paused")]
     ProtocolPaused,
+    #[msg("Oracle price moved below the caller's minimum acceptable guard")]
+    OraclePriceBelowGuard,
     #[msg("Legacy protocol config must use migrate_protocol_config")]
     ProtocolConfigMigrationRequired,
     #[msg("Protocol config is already in the current format")]
     ProtocolConfigAlreadyMigrated,
     #[msg("Institution is in a terminal state")]
     InstitutionInTerminalState,
+    #[msg("zkUSD mint freeze authority is not configured for compliance controls")]
+    MintFreezeAuthorityNotConfigured,
 }
 
 fn authorize_permissioned_mint(
