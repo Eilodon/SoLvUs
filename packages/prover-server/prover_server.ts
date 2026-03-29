@@ -337,8 +337,8 @@ app.post('/compliance/institution-status', requireApiKey, async (req, res) => {
     if (typeof institutionIdHash !== 'string') {
       return res.status(400).json({ error: 'institution_id_hash is required' });
     }
-    if (status !== 'active' && status !== 'suspended') {
-      return res.status(400).json({ error: 'status must be active or suspended' });
+    if (status !== 'active' && status !== 'suspended' && status !== 'terminated') {
+      return res.status(400).json({ error: 'status must be active, suspended, or terminated' });
     }
 
     const signature = await setInstitutionStatusOnDevnet(config, institutionIdHash as Hex, status);

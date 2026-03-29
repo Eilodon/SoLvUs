@@ -10,11 +10,12 @@ name = "liquidation"
 [features]
 default = []
 cpi = []
+no-entrypoint = []
 
 [dependencies]
 anchor-lang = "0.31.1"
 anchor-spl = "0.31.1"
-solvus = { path = "../solvus", features = ["cpi"] }
+solvus = { path = "../solvus", features = ["cpi", "no-entrypoint"] }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [

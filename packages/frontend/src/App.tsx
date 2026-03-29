@@ -351,6 +351,25 @@ function App() {
     }
   }
 
+  const terminateInstitution = async () => {
+    setStatus('loading')
+    setError('')
+    try {
+      if (!complianceContext) {
+        throw new Error('No institution loaded for terminate action')
+      }
+      await mutateComplianceState('/compliance/institution-status', {
+        institution_id_hash: complianceContext.institutionIdHash,
+        status: 'terminated',
+      })
+      setStatus('done')
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown terminate error'
+      setError(message)
+      setStatus('error')
+    }
+  }
+
   const revokePermit = async () => {
     setStatus('loading')
     setError('')
@@ -636,6 +655,13 @@ function App() {
                   className="rounded-full bg-emerald-300 px-4 py-2 text-xs font-bold text-stone-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Reactivate
+                </button>
+                <button
+                  onClick={terminateInstitution}
+                  disabled={status === 'loading' || !complianceContext}
+                  className="rounded-full bg-stone-200 px-4 py-2 text-xs font-bold text-stone-950 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Terminate Institution
                 </button>
                 <button
                   onClick={revokePermit}

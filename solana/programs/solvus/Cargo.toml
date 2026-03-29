@@ -10,6 +10,7 @@ name = "solvus"
 [features]
 default = []
 cpi = []
+no-entrypoint = []
 
 [dependencies]
 anchor-lang = { version = "0.31.1", features = ["init-if-needed"] }
