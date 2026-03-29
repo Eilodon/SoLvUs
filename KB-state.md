@@ -8,7 +8,7 @@
 - **Project name:** SoLvUs (Solana + Verifiable + Us)
 - **Scope:** Full protocol - DeFi with zero-knowledge proofs on Solana
 - **Last updated:** 2026-03-29
-- **Active cycle:** #5
+- **Active cycle:** #6
 
 ---
 
@@ -143,6 +143,7 @@ To be mapped when [G] identifies specific code-level hypotheses.
 | #2 | [G→E→A→T→M] | Proposal verification + ADR drafting | COMPLETE | $0.14 | N/A | 2026-03-28 |
 | #3 | [V→G→E→A→M] | Deep re-audit after repo/devnet cleanup | COMPLETE | $0.022 | ~36,363 | 2026-03-29 |
 | #5 | [V→G→E→A→T→M] | StableHacks Institutional Vault fit audit + strategy synthesis | COMPLETE | $0.032 | ~12,500 | 2026-03-29 |
+| #6 | [V→G→E→A] | StableHacks optimization cycle: hackathon-fit upgrade prioritization | COMPLETE | $0.080 | ~8,750 | 2026-03-29 |
 
 ---
 
@@ -518,6 +519,392 @@ req.setTimeout(45000);   // NEW: 45s < Solana timeout
 
 // Add webhook support for async notification
 app.post('/prove-async', async (req, res) => {
+```
+
+---
+
+## [V] Vision — Cycle #6 — 2026-03-29T17:03:00+07:00
+
+### C4 Model
+
+#### Level 1: System Context
+```
+Compliance Officer / Institutional Operator / StableHacks Judges
+        │
+        ▼
+SoLvUs StableHacks Demo Surface
+        │
+        ├──► Solana Devnet (Anchor programs, verified txs, SPL zkUSD)
+        ├──► Prover Server (Groth16 proof generation, compliance orchestration)
+        ├──► Noir Circuit + Relayer (BTC collateral attestation)
+        ├──► Pyth Oracle (BTC/USD settlement price)
+        └──► Hackathon Context (Tenity, AMINA Bank, Solana Foundation, Fireblocks, Solstice, UBS, Keyrock, Steakhouse)
+```
+
+#### Level 2: Container
+- **Frontend desk** (`packages/frontend/`) — current single-screen issuance/compliance UI
+- **Prover server** (`packages/prover-server/`) — `/health`, mint prep, compliance actions, devnet orchestration
+- **On-chain protocol** (`solana/programs/solvus/`) — permissioned mint, permit lifecycle, freeze/pause, vault state
+- **Circuit + prover contract** (`circuits/`, `packages/core/prover/`) — Groth16/Noir proof path
+- **Narrative assets** (`docs/`, `README.md`) — submission copy, demo script, runbook
+- **Demo ops scripts** (`scripts/`) — smoke rehearsal and deployment/prep scripts
+
+#### Level 3: Component (hackathon-optimized domain)
+- **Demo Surface** — persona framing, operator/compliance separation, status cards, audit visibility
+- **Compliance Evidence Layer** — KYB/Travel Rule structured hashes, permit state, exportable audit records
+- **Narrative Layer** — AMINA-first positioning, partner leverage, roadmap framing
+- **Demo Reliability Layer** — oracle freshness, proof warm-up, preflight checks
+- **Protocol Hardening Roadmap** — relayer trust minimization, multisig, oracle cross-check
+
+### Bounded Contexts
+
+| Context | Owner | Depends On | Consumers | Notes |
+|---|---|---|---|---|
+| Demo Surface | frontend | prover-server APIs | Judges, operators, compliance demo | Current UI is functional but not role-separated |
+| Compliance Gateway | prover-server | solvus, devnet_mint | Frontend, smoke scripts | Good base for audit/export features |
+| Protocol Core | solvus | verifier, oracle, SPL Token | prover-server, frontend | Do not destabilize for cosmetic gains |
+| Narrative Assets | docs, README | current shipped behavior | Judges, reviewers | Highest-ROI non-protocol leverage |
+| Demo Ops | scripts, prover-server | devnet, oracle, prover | Team during live demo | Reliability gap still exists |
+| Production Hardening Roadmap | docs, protocol design | relayer/circuit/oracle/admin controls | Judges, future contributors | Must be framed honestly, not overclaimed |
+
+### Resource Budget
+
+| Resource | Budget | Unit | Alert Threshold | Notes |
+|---|---|---|---|---|
+| Financial | UNCONSTRAINED | USD/cycle | 80% consumed | Research cycle only |
+| API / browsing | UNCONSTRAINED | requests/session | 80% consumed | Official-source validation required |
+| Time | 16 | eng-hours | 80% consumed | Conservative hackathon polish budget assumption |
+| Compute | Existing dev workstation | CPU/RAM | N/A | No heavy proving benchmark cycle needed |
+| Team bandwidth | 1-2 | engineers | 80% consumed | Assume small hackathon team |
+
+### Alert Thresholds
+- Warning: if a proposed improvement needs protocol/circuit rewrite, downgrade from hackathon track to roadmap item.
+- Hard stop: if a change risks destabilizing verified devnet mint flow, do not include it in immediate build order.
+- Rollback trigger: if demo-facing refactor removes current debug/mint path without preserving fallback, revert to dual-mode design.
+
+### Flags
+- Architecture type: distributed protocol + compliance gateway + demo/narrative surface
+- Known high-coupling areas: prover-server ↔ solvus; circuit ↔ public input contract; frontend ↔ compliance state JSON
+- Areas explicitly OUT of scope this cycle: Bitcoin light client, Token-2022 migration, full privacy V2 circuit rewrite, full multi-oracle settlement rewrite
+
+## [G] Diagnose — Cycle #6 — 2026-03-29T17:03:00+07:00
+
+### Root Cause Taxonomy Scan
+
+#### Layer 1 — Connection Lifecycle: RELEVANT
+Hypothesis: live demo risk is concentrated in runtime readiness boundaries, especially oracle freshness and proof warm-up, not in steady-state protocol correctness.
+Evidence so far: repo has `/health` and smoke rehearsal, but no dedicated `warm-oracle`, `proof-only`, or preflight flow.
+
+#### Layer 2 — Serialization Boundary: RELEVANT
+Hypothesis: the biggest institutional credibility gap is not mint serialization now; it is missing structured compliance export/schema boundaries for Travel Rule and audit evidence.
+Evidence so far: structured hashes exist, but no IVMS101 interface or institution-level audit export endpoint exists.
+
+#### Layer 3 — Async/Sync Boundary: RELEVANT
+Hypothesis: the current demo journey still behaves like a developer workflow instead of an institutional user journey because frontend and script flows expose raw JSON and operational primitives directly.
+Evidence so far: single-screen UI still centers payload textarea and compliance JSON blobs.
+
+#### Layer 4 — Type Contract: RELEVANT
+Hypothesis: partner-aligned production signals are missing mostly at contract/documentation level: no explicit Fireblocks webhook/policy schema, no IVMS101 TS type module, no export contract.
+Evidence so far: codebase has no Fireblocks-specific type or IVMS101 module.
+
+#### Layer 5 — Graph/State Lifecycle: RELEVANT
+Hypothesis: the most valuable UI upgrade is not a total rewrite, but a role-separated presentation layer built on top of the existing mint/compliance state graph.
+Evidence so far: current frontend already exposes real state and controls; replacing it entirely would be wasteful and risk regressions.
+
+#### Layer 6 — Error Propagation: RELEVANT
+Hypothesis: hackathon scoring risk comes from mismatched storytelling more than hidden protocol failure; generic copy/button-tour demo undersells shipped capability.
+Evidence so far: submission copy is generic, demo script is still action-tour oriented, official hackathon context is highly partner-specific.
+
+### Hypothesis Table
+
+| ID | Root Cause Summary | Components Affected | Blast Radius | Verify Priority |
+|---|---|---|---|---|
+| H-06 | Highest-ROI upgrade is a role-separated institutional dashboard layered on the current desk, not more protocol features | frontend, demo narrative | 🔴 HIGH | Immediate |
+| H-07 | AMINA/partner-targeted submission and demo reframing will increase hackathon fit more than generic technical copy | docs, README, pitch assets | 🔴 HIGH | Immediate |
+| H-08 | Structured compliance evidence layer (IVMS101 schema + audit export) is the strongest institutional credibility upgrade that fits current architecture | core, prover-server, frontend, docs | 🔴 HIGH | Immediate |
+| H-09 | Fireblocks and partner ecosystem signaling can be added with low engineering risk and high demo leverage | docs, prover-server types | 🟠 MEDIUM | After H-06/H-08 |
+| H-10 | Demo-preflight features (warm oracle, proof warm-up, checklist) reduce live-demo failure more effectively than additional protocol changes | prover-server, scripts, docs | 🔴 HIGH | Immediate |
+| H-11 | Relayer committee/freshness hardening is the right next protocol roadmap item, but not the best immediate hackathon implementation target | circuit, core, solvus, docs | 🟠 MEDIUM | After H-06/H-10 |
+| H-12 | Broadening to an extra RWA track is a worthwhile optimization | docs, submission scope | 🟡 LOW | Immediate reject candidate |
+
+### Complexity Gate Result
+Scores: [coupling, state, async, silence, time] = [4, 3, 3, 3, 4]
+avg = 3.4 → Debate triggered
+
+### Debate Result
+
+#### Proposer
+- H-06: institutional dual-mode dashboard over existing desk | Confidence: 88% | Est. simulation cost: micro_sim_small | Est. USD: $0.01
+- H-08: compliance evidence layer with IVMS101 schema + export | Confidence: 84% | Est. simulation cost: micro_sim_medium | Est. USD: $0.03
+- H-10: demo preflight + oracle/proof warm-up | Confidence: 86% | Est. simulation cost: micro_sim_small | Est. USD: $0.01
+- H-11: relayer committee/freshness as roadmap, not immediate build | Confidence: 78% | Est. simulation cost: single_llm_call | Est. USD: $0.02
+
+#### Critic
+- H-06: approved; frontend still exposes payload textarea and JSON blobs, but should preserve current debug path behind advanced mode rather than delete it.
+- H-08: approved; strongest institutional fit gain if implemented incrementally on current compliance gateway.
+- H-10: approved; low-risk, high-value operational insurance.
+- H-11: approved with scope limit; do not let protocol hardening roadmap displace demo-facing work.
+- H-12: vetoed as implementation target; official Tenity materials show only three focus areas, not an RWA track.
+
+#### Synthesizer
+- Final queue prioritizes improvements that increase judge comprehension, institutional credibility, and demo reliability without destabilizing verified protocol flow.
+
+### Final Hypothesis Queue (→ [E])
+| ID | Hypothesis | Blast Radius | Sim Type | Est. Cost |
+|---|---|---|---|---|
+| H-06 | Dual-mode institutional dashboard is higher ROI than more protocol work | 🔴 HIGH | micro_sim_small | $0.01 |
+| H-07 | AMINA/partner-first narrative rewrite is mandatory for hackathon fit | 🔴 HIGH | micro_sim_small | $0.01 |
+| H-08 | IVMS101 schema + audit export is the best compliance credibility upgrade | 🔴 HIGH | micro_sim_medium | $0.03 |
+| H-10 | Demo preflight and warm-up should be built before new protocol features | 🔴 HIGH | micro_sim_small | $0.01 |
+| H-09 | Fireblocks/partner integration stubs are low-risk leverage | 🟠 MEDIUM | micro_sim_small | $0.01 |
+| H-11 | Relayer hardening belongs in roadmap phase, not immediate demo sprint | 🟠 MEDIUM | single_llm_call | $0.02 |
+| H-12 | Extra RWA-track broadening is a good immediate optimization | 🟡 LOW | string_replace | $0.001 |
+
+## [E] Verify — Cycle #6 — 2026-03-29T17:03:00+07:00
+
+### FinOps Filter Decision
+KB datapoints: 5 → Mode: SEQUENTIAL
+Filter threshold: 0.3
+
+| H-ID | Sim Type | Est. Cost | ROI | Decision |
+|---|---|---|---|---|
+| H-06 | micro_sim_small | $0.01 | 12.0 | ADMIT |
+| H-07 | micro_sim_small | $0.01 | 15.0 | ADMIT |
+| H-08 | micro_sim_medium | $0.03 | 10.0 | ADMIT |
+| H-10 | micro_sim_small | $0.01 | 14.0 | ADMIT |
+| H-09 | micro_sim_small | $0.01 | 8.0 | ADMIT |
+| H-11 | single_llm_call | $0.02 | 4.0 | ADMIT |
+| H-12 | string_replace | $0.001 | 1.0 | ADMIT |
+
+### Simulation: H-06 — Dual-Mode Institutional Dashboard
+
+**Type:** micro_sim_small  
+**Est. cost:** $0.01 | **Actual cost:** $0.01  
+**Blast radius:** 🔴 HIGH
+
+**Setup:** inspect current `packages/frontend/src/App.tsx`.
+**Reproduce:** review the primary interaction surface and compliance panel.
+**Execute:** verify whether the UI is already role-separated or still centered on dev/operator primitives.
+**Assert:** current screen still exposes raw payload textarea, JSON responses, JSON compliance state, and no sidebar/persona split; however it already has real action buttons, status cards, and compliance controls.
+
+**Verdict:** ✅ CONFIRMED  
+**Evidence:** [App.tsx] currently mixes operator flow, debug payload, health JSON, response JSON, and compliance actions in one screen.
+**Implication for [A]:** build a dual-mode dashboard on top of the current desk; preserve an advanced/debug panel instead of rewriting from scratch.
+
+### Simulation: H-07 — AMINA/Partner-First Narrative Rewrite
+
+**Type:** micro_sim_small  
+**Est. cost:** $0.01 | **Actual cost:** $0.01  
+**Blast radius:** 🔴 HIGH
+
+**Setup:** compare current submission/demo docs with official Tenity materials.
+**Reproduce:** inspect `docs/STABLEHACKS_SUBMISSION_COPY.md`, `docs/STABLEHACKS_2MIN_VIDEO_SCRIPT.md`, and Tenity official StableHacks pages.
+**Execute:** verify whether SoLvUs copy names AMINA/partners or remains generic.
+**Assert:** current docs are generic; official Tenity sources explicitly position AMINA Bank, Solana Foundation, Fireblocks, Solstice, UBS, Keyrock, and Steakhouse as central ecosystem actors.
+
+**Verdict:** ✅ CONFIRMED  
+**Evidence:** current one-liner starts generic; official Tenity article on 2026-01-26 explicitly names AMINA Bank as co-host and Fireblocks/Solstice/UBS/etc. as partners.
+**Implication for [A]:** rewrite submission/demo around AMINA-led institutional workflow and named partner relevance.
+
+### Simulation: H-08 — IVMS101 Schema + Audit Export
+
+**Type:** micro_sim_medium  
+**Est. cost:** $0.03 | **Actual cost:** $0.02  
+**Blast radius:** 🔴 HIGH
+
+**Setup:** inspect compliance gateway and repo for Travel Rule and audit export support.
+**Reproduce:** search for `IVMS101`, `travel_rule.ts`, `/compliance/audit-trail`, and current Travel Rule hashing logic.
+**Execute:** compare current implementation with institutional-grade evidence expectations.
+**Assert:** repo already derives structured audit hashes with provider, decision reference, originator VASP, and beneficiary VASP labels, but there is no explicit IVMS101 TypeScript model and no institution-level audit export endpoint.
+
+**Verdict:** ✅ CONFIRMED  
+**Evidence:** structured Travel Rule hash inputs exist, but there is no reusable schema contract and no export surface for regulator/reporting workflows.
+**Implication for [A]:** add IVMS101-ish TS types and audit export before deeper compliance features.
+
+### Simulation: H-10 — Demo Preflight Before New Features
+
+**Type:** micro_sim_small  
+**Est. cost:** $0.01 | **Actual cost:** $0.01  
+**Blast radius:** 🔴 HIGH
+
+**Setup:** inspect current ops tooling.
+**Reproduce:** review `/health`, smoke rehearsal script, and runbook.
+**Execute:** check whether warm-oracle, proof-only warmup, or preflight scripts already exist.
+**Assert:** repo has `/health` and `stablehacks:smoke`, but no dedicated `warm-oracle`, `proof-only`, or `demo-preflight.sh`.
+
+**Verdict:** ✅ CONFIRMED  
+**Evidence:** live-demo readiness tooling is partial, not complete.
+**Implication for [A]:** add operational warm-up and preflight before additional protocol work.
+
+### Simulation: H-09 — Fireblocks/Partner Integration Stubs
+
+**Type:** micro_sim_small  
+**Est. cost:** $0.01 | **Actual cost:** $0.01  
+**Blast radius:** 🟠 MEDIUM
+
+**Setup:** compare official partner list with repo references.
+**Reproduce:** search repo for `Fireblocks`, partner names, and integration contracts.
+**Execute:** verify whether partner alignment is visible in code/docs.
+**Assert:** repo has effectively no Fireblocks-specific type/interface or partner integration map.
+
+**Verdict:** ✅ CONFIRMED  
+**Evidence:** official hackathon materials emphasize partner ecosystem; repo barely signals it.
+**Implication for [A]:** add lightweight integration stubs/docs, not deep dependency integration.
+
+### Simulation: H-11 — Relayer Hardening as Roadmap Item
+
+**Type:** single_llm_call  
+**Est. cost:** $0.02 | **Actual cost:** $0.02  
+**Blast radius:** 🟠 MEDIUM
+
+**Setup:** inspect current circuit/public-input contract and trust model docs.
+**Reproduce:** confirm whether repo ships single-relayer attestation and whether stronger BTC verification is immediately practical.
+**Execute:** compare improvement cost/benefit against hackathon-facing items.
+**Assert:** current code proves authorized-relayer signature, but not BTC truth; moving to committee/freshness is materially smaller than Bitcoin light client, yet still larger and riskier than demo/compliance/documentation upgrades.
+
+**Verdict:** ✅ CONFIRMED  
+**Evidence:** relayer trust remains the key protocol weakness, but it is better framed as roadmap-phase hardening than immediate hackathon sprint work.
+**Implication for [A]:** include relayer committee/freshness as next hardening wave after demo-fit upgrades.
+
+### Simulation: H-12 — Extra RWA Track Broadening
+
+**Type:** string_replace  
+**Est. cost:** $0.001 | **Actual cost:** $0.001  
+**Blast radius:** 🟡 LOW
+
+**Setup:** verify official StableHacks focus areas.
+**Reproduce:** inspect Tenity program page.
+**Execute:** compare official focus areas with proposed extra-track broadening.
+**Assert:** official focus areas are Institutional Permissioned DeFi Vaults, Cross-Border Stablecoin Treasury, and Programmable Stablecoin Payments; no RWA track is listed.
+
+**Verdict:** ❌ REJECTED  
+**Evidence:** broadening to an RWA track is not aligned to the official current program page.
+**Implication for [A]:** keep scope narrow; do not spend effort reframing SoLvUs as an RWA-track submission.
+
+### Summary for [A]
+Confirmed: H-06, H-07, H-08, H-09, H-10, H-11  
+Rejected: H-12  
+Deferred: none
+
+### Cost Record (for KB datapoints)
+| Operation | Estimated | Actual | Delta |
+|---|---|---|---|
+| H-06 micro_sim_small | $0.01 | $0.01 | $0.00 |
+| H-07 micro_sim_small | $0.01 | $0.01 | $0.00 |
+| H-08 micro_sim_medium | $0.03 | $0.02 | -$0.01 |
+| H-10 micro_sim_small | $0.01 | $0.01 | $0.00 |
+| H-09 micro_sim_small | $0.01 | $0.01 | $0.00 |
+| H-11 single_llm_call | $0.02 | $0.02 | $0.00 |
+| H-12 string_replace | $0.001 | $0.001 | $0.00 |
+
+## [A] Decide — Cycle #6 — 2026-03-29T17:03:00+07:00
+
+### New ADRs This Cycle
+
+#### ADR-005 | 🔴 MANDATORY
+**Problem:** The current demo surface mixes operator workflow, compliance controls, raw JSON payloads, and debugging primitives in one screen, which undersells institutional value to hackathon judges.
+
+**Decision:** Evolve the frontend into a dual-mode institutional dashboard with explicit `Compliance` and `Operator` views, while preserving the current raw/debug desk behind an `Advanced` panel.
+
+**Evidence:** Simulation H-06 confirmed the highest-ROI surface gap is presentation, not protocol capability.
+
+**Pattern:**  
+- default view = role-based cards, metrics, badges, audit stream  
+- advanced view = existing payload textarea, JSON state, raw responses  
+- do not delete the current functional controls until the role-based view is stable
+
+**Rejected Alternatives:** full frontend rewrite from scratch; leaving the current desk untouched.
+
+**Initial weight:** 1.0 | **λ:** 0.25 | **Energy Tax priority:** 0.95
+
+#### ADR-006 | 🔴 MANDATORY
+**Problem:** Current submission and demo narrative are generic and do not reflect the named institutional actors and partner context of StableHacks 2026.
+
+**Decision:** Reframe all hackathon-facing copy around an AMINA-led institutional workflow and explicitly map SoLvUs to official partner context where truthful.
+
+**Evidence:** Simulation H-07 confirmed mismatch between current generic copy and official Tenity positioning.
+
+**Pattern:**  
+- one-liner names institutional issuance infrastructure for AMINA-like clients  
+- demo script uses named compliance officer / operator persona  
+- partner mentions must remain factual and phase-labeled
+
+**Rejected Alternatives:** generic “regulated institutions” framing; speculative claims about signed partnerships or pilots.
+
+**Initial weight:** 1.0 | **λ:** 0.25 | **Energy Tax priority:** 0.95
+
+#### ADR-007 | 🟠 REQUIRED
+**Problem:** SoLvUs has a compliance audit reference trail but lacks a reusable Travel Rule schema contract and exportable institution audit trail, limiting institutional credibility.
+
+**Decision:** Add a structured compliance evidence layer consisting of:
+- an IVMS101-aligned TypeScript schema module for Travel Rule records,
+- an institution audit export endpoint (`json` + `csv`),
+- a frontend export action for compliance officers.
+
+**Evidence:** Simulation H-08 confirmed the gap and showed current architecture already supports incremental adoption.
+
+**Pattern:**  
+- on-chain hash remains the immutable link  
+- off-chain preimage becomes typed, exportable, and revealable  
+- export surface is read-only and institution-scoped
+
+**Rejected Alternatives:** full VASP-to-VASP network implementation now; keeping only opaque hashes with no export path.
+
+**Initial weight:** 0.95 | **λ:** 0.20 | **Energy Tax priority:** 0.88
+
+#### ADR-008 | 🟠 REQUIRED
+**Problem:** Live demo failure risk is still materially driven by runtime readiness gaps rather than missing protocol features.
+
+**Decision:** Build a demo-ops layer before additional protocol scope:
+- `/compliance/warm-oracle`
+- proof warm-up mode for smoke rehearsal
+- `scripts/demo-preflight.sh`
+- runbook instructions for pre-demo execution
+
+**Evidence:** Simulation H-10 confirmed `/health` and smoke exist, but preflight/warm-up coverage is incomplete.
+
+**Pattern:**  
+- every live demo starts with preflight  
+- oracle freshness check is explicit  
+- prover warm-up is scripted, not manual tribal knowledge
+
+**Rejected Alternatives:** assuming smoke rehearsal alone is enough; spending this budget on extra protocol features first.
+
+**Initial weight:** 0.95 | **λ:** 0.20 | **Energy Tax priority:** 0.90
+
+#### ADR-009 | 🟡 RECOMMENDED
+**Problem:** Partner ecosystem leverage is under-signaled in the repo and demo flow.
+
+**Decision:** Add lightweight Fireblocks/policy-engine integration stubs and a factual ecosystem integration map to docs and types, without introducing hard runtime dependencies.
+
+**Evidence:** Simulation H-09 confirmed near-zero current signaling despite official partner importance.
+
+**Pattern:**  
+- TypeScript interface / stub for policy webhook payloads  
+- docs explain production signing and policy approval path as Phase 2  
+- no fake integration claims
+
+**Rejected Alternatives:** full partner SDK integration during hackathon sprint; ignoring partners entirely.
+
+**Initial weight:** 0.85 | **λ:** 0.20 | **Energy Tax priority:** 0.72
+
+#### ADR-010 | 🟡 RECOMMENDED
+**Problem:** Relayer trust is still the core protocol weakness, but immediate hackathon ROI is lower than demo/compliance/documentation upgrades.
+
+**Decision:** Keep relayer hardening as the first roadmap-phase protocol upgrade after demo-facing work:
+- freshness bounds in attested payload,
+- attestor committee / quorum signatures,
+- admin-controlled rotation and pause policy.
+
+**Evidence:** Simulation H-11 confirmed this is the best next hardening path, but not the first hackathon sprint target.
+
+**Pattern:**  
+- shipped demo: relayer-attested collateral  
+- roadmap: committee attestation before any Bitcoin light-client ambition
+
+**Rejected Alternatives:** claiming trustless BTC verification now; jumping directly to Bitcoin light client; pulling this ahead of hackathon-facing fixes.
+
+**Initial weight:** 0.80 | **λ:** 0.15 | **Energy Tax priority:** 0.60
   const webhookUrl = req.body?.webhook_url;
   // Process async, call webhook when done
 });

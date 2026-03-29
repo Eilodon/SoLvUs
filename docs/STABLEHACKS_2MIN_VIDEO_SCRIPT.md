@@ -1,61 +1,54 @@
 # StableHacks 2-Minute Video Script
 
 ## Goal
-Show that Solvus is no longer just a BTC-backed stablecoin prototype. It is now a permissioned issuance vault with visible compliance controls for regulated institutions.
+Show that Solvus is not just a BTC-backed mint. It is a compliance-controlled issuance workflow for institutional clients.
 
 ## Setup
 - Terminal 1: `npm run server`
 - Terminal 2: `npm run dev`
-- Terminal 3: `node scripts/institutional-mint-smoke.mjs`
+- Terminal 3: `COMPLIANCE_API_KEY=... npm run demo:preflight`
 - Browser: open the frontend desk and keep Phantom ready
 
 ## 0:00 - 0:15
 Narration:
-"Solvus lets an approved institution mint zkUSD from BTC collateral on Solana, while keeping collateral proofs private with zero knowledge and enforcing policy gates before issuance."
+"I am going to show one workflow: Sophie, a compliance officer at AMINA Bank, needs to authorize Meridian Asset Management's first BTC-backed zkUSD issuance while keeping full intervention power at every step."
 
 Screen:
-- Show the frontend hero and the four cards: `Policy`, `Identity`, `Prover`, `Solana`.
+- Show the hero plus the `Compliance`, `Operator`, and `Advanced` tabs.
 
 ## 0:15 - 0:35
 Narration:
-"The key change for StableHacks is the permissioned control plane. Every mint now requires an institution profile, KYB reference, Travel Rule reference, KYT score, a sanctions screen, and a short-lived compliance permit."
+"Sophie starts in the Compliance view. She creates Meridian's institution profile, binds KYB and Travel Rule evidence, and issues a short-lived mint permit tied to Meridian's operator wallet, mint cap, and KYT score."
 
 Screen:
-- Highlight the policy form fields in the frontend:
-  `Institution Label`, `KYB Reference`, `Travel Rule Reference`, `KYT Score`, `Permit TTL`, `Daily Mint Cap`, `Lifetime Mint Cap`.
+- Highlight the institution card, permit card, and audit timeline.
 
 ## 0:35 - 0:55
 Narration:
-"The server provisions the institution account and compliance permit on devnet before the operator signs. The dashboard reads actual on-chain institution and permit state, not mocked UI state."
+"Now we switch to the Operator view. Meridian sees the permit summary, the current BTC price guard, and the amount they are allowed to mint. The permit is real, and the dashboard is reading live state, not mocked UI."
 
 Screen:
-- Click `Mint With Browser Wallet` once or run the smoke script phase-one output.
-- Show `Compliance Audit` panel loading `institution` and `permit` JSON.
+- Show the permit summary, oracle guard, and mint controls.
 
 ## 0:55 - 1:20
 Narration:
-"Compliance admins can freeze the institution or revoke a permit before execution. That makes the vault meaningfully permissioned and much closer to institutional operating requirements."
+"Meridian signs the operator leg. Solvus verifies the Groth16 proof, checks the permit, screens the operator, updates caps, and records the mint submission in the audit trail."
 
 Screen:
-- Click `Suspend Institution`.
-- Refresh and show institution status becomes `suspended`.
-- Click `Reactivate`.
-- Click `Revoke Permit`.
-- Click `Pause Protocol` and then `Resume Protocol`.
-- Refresh and show permit state becomes `revoked`.
+- Click `Mint With Browser Wallet`.
+- Show the submitted Solana signature and the audit trail gaining a new mint record.
 
 ## 1:20 - 1:45
 Narration:
-"For an approved operator, Solvus prepares a partially signed transaction, the demo browser wallet signs the operator leg, and the mint settles on Solana. In production that signing step moves to MPC or HSM-backed institutional custody. The permit is then consumed and the institution caps update."
+"A few minutes later, Sophie sees unusual activity. She returns to Compliance, suspends the institution, freezes the holder account, and can export the whole audit trail as CSV. The system is permissioned because her decision is enforceable."
 
 Screen:
-- Run the smoke script phase-two or use the frontend `Mint With Phantom` live path.
-- Show submitted transaction signature and the post-mint compliance state where permit moves to `used`.
+- Click `Suspend Institution`, `Freeze Holder`, then `Export CSV`.
+- Show updated institution status and holder state.
 
 ## 1:45 - 2:00
 Narration:
-"So the product is not just a stablecoin contract. It is a permissioned BTC-backed issuance vault with compliance gating, sanctions screening, operator controls, audit visibility, and Solana execution. The current code already separates protocol-admin and compliance-admin responsibilities on-chain. The devnet demo maps both roles to one local key and a browser wallet for convenience, while the production design moves them behind a 3-of-5 Squads multisig plus institutional custody."
+"So Solvus is not a generic stablecoin dashboard. It is institutional issuance infrastructure: permit-bound minting, exportable compliance evidence, intervention controls, and a real Solana settlement path. Today it ships with relayer-attested BTC collateral and a real proof system. The next production hardening step is committee-based attestation and multisig governance."
 
 Screen:
-- End on the compliance audit panel plus the response panel showing:
-  `institution_id_hash`, `compliance_permit_pda`, `submitted_signature`.
+- End on the Compliance view with institution status, audit records, and the latest transaction signature.

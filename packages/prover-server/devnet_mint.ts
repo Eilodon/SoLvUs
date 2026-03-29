@@ -60,6 +60,8 @@ const DEFAULT_ORACLE_PRICE_GUARD_BPS = 200;
 export interface DevnetMintResult {
   signature: string;
   cached?: boolean;
+  institution_upsert_signature?: string;
+  compliance_permit_signature?: string;
   nullifier_hash: Hex;
   proof: Hex;
   public_inputs: Hex;
@@ -79,6 +81,8 @@ export interface DevnetMintResult {
 export interface PreparedDevnetMintResult {
   serialized_transaction?: string;
   cached?: boolean;
+  institution_upsert_signature?: string;
+  compliance_permit_signature?: string;
   nullifier_hash: Hex;
   proof: Hex;
   public_inputs: Hex;
@@ -194,6 +198,12 @@ interface OracleRefreshWindow {
 interface PermissionedMintAccounts {
   institutionPda: PublicKey;
   compliancePermitPda: PublicKey;
+}
+
+interface PermissionedProvisioningResult {
+  accounts: PermissionedMintAccounts;
+  institutionUpsertSignature?: string;
+  compliancePermitSignature?: string;
 }
 
 const INSTITUTION_ACCOUNT_DISCRIMINATOR = createHash('sha256')
@@ -770,7 +780,7 @@ async function ensurePermissionedMintAccounts(
   owner: PublicKey,
   mintInput: MintZkUSDInput,
   profile: InstitutionPermissionProfile,
-): Promise<PermissionedMintAccounts> {
+): Promise<PermissionedProvisioningResult> {
   const accounts = getPermissionedMintAccounts(programId, profile, mintInput);
 
   const upsertInstitutionTx = new Transaction().add(
@@ -785,9 +795,12 @@ async function ensurePermissionedMintAccounts(
       data: encodeUpsertInstitutionInstruction(profile, owner, 1),
     }),
   );
-  await sendAndConfirmTransaction(connection, upsertInstitutionTx, [payer], { commitment: 'confirmed' });
+  const institutionUpsertSignature = await sendAndConfirmTransaction(connection, upsertInstitutionTx, [payer], {
+    commitment: 'confirmed',
+  });
 
   const existingPermit = await connection.getAccountInfo(accounts.compliancePermitPda);
+  let compliancePermitSignature: string | undefined;
   if (!existingPermit) {
     const issuePermitTx = new Transaction().add(
       new TransactionInstruction({
@@ -802,10 +815,16 @@ async function ensurePermissionedMintAccounts(
         data: encodeIssueCompliancePermitInstruction(profile, mintInput.nullifier_hash, mintInput.zkusd_amount),
       }),
     );
-    await sendAndConfirmTransaction(connection, issuePermitTx, [payer], { commitment: 'confirmed' });
+    compliancePermitSignature = await sendAndConfirmTransaction(connection, issuePermitTx, [payer], {
+      commitment: 'confirmed',
+    });
   }
 
-  return accounts;
+  return {
+    accounts,
+    institutionUpsertSignature,
+    compliancePermitSignature,
+  };
 }
 
 function buildAnchorWallet(payer: Keypair): {
@@ -1057,6 +1076,8 @@ async function buildMintTransaction(
   oracleRefreshWindow: OracleRefreshWindow | null;
   resolvedMinBtcPriceE8: number;
   permissionProfile: InstitutionPermissionProfile;
+  institutionUpsertSignature?: string;
+  compliancePermitSignature?: string;
 }> {
   const programId = new PublicKey(config.solvusProgramId!);
   const verifierProgramId = new PublicKey(config.groth16VerifierProgramId!);
@@ -1111,10 +1132,12 @@ async function buildMintTransaction(
       oracleRefreshWindow: null,
       resolvedMinBtcPriceE8: mintInput.min_btc_price_e8 ?? 1,
       permissionProfile,
+      institutionUpsertSignature: undefined,
+      compliancePermitSignature: undefined,
     };
   }
 
-  await ensurePermissionedMintAccounts(
+  const provisioning = await ensurePermissionedMintAccounts(
     connection,
     payer,
     programId,
@@ -1182,6 +1205,8 @@ async function buildMintTransaction(
     oracleRefreshWindow,
     resolvedMinBtcPriceE8,
     permissionProfile,
+    institutionUpsertSignature: provisioning.institutionUpsertSignature,
+    compliancePermitSignature: provisioning.compliancePermitSignature,
   };
 }
 
@@ -1237,6 +1262,8 @@ export async function mintOnDevnet(
     cached,
     oracleRefreshWindow,
     resolvedMinBtcPriceE8,
+    institutionUpsertSignature,
+    compliancePermitSignature,
   } = await buildMintTransaction(
     config,
     connection,
@@ -1250,6 +1277,8 @@ export async function mintOnDevnet(
     return {
       signature: 'already-minted',
       cached: true,
+      institution_upsert_signature: institutionUpsertSignature,
+      compliance_permit_signature: compliancePermitSignature,
       nullifier_hash: mintInput.nullifier_hash,
       proof: mintInput.proof,
       public_inputs: mintInput.public_inputs,
@@ -1274,6 +1303,8 @@ export async function mintOnDevnet(
 
   return {
     signature,
+    institution_upsert_signature: institutionUpsertSignature,
+    compliance_permit_signature: compliancePermitSignature,
     nullifier_hash: mintInput.nullifier_hash,
     proof: mintInput.proof,
     public_inputs: mintInput.public_inputs,
@@ -1327,6 +1358,8 @@ export async function prepareMintOnDevnet(
     cached,
     oracleRefreshWindow,
     resolvedMinBtcPriceE8,
+    institutionUpsertSignature,
+    compliancePermitSignature,
   } = await buildMintTransaction(
     config,
     connection,
@@ -1340,6 +1373,8 @@ export async function prepareMintOnDevnet(
   if (cached) {
     return {
       cached: true,
+      institution_upsert_signature: institutionUpsertSignature,
+      compliance_permit_signature: compliancePermitSignature,
       nullifier_hash: mintInput.nullifier_hash,
       proof: mintInput.proof,
       public_inputs: mintInput.public_inputs,
@@ -1368,6 +1403,8 @@ export async function prepareMintOnDevnet(
         verifySignatures: false,
       })
       .toString('base64'),
+    institution_upsert_signature: institutionUpsertSignature,
+    compliance_permit_signature: compliancePermitSignature,
     nullifier_hash: mintInput.nullifier_hash,
     proof: mintInput.proof,
     public_inputs: mintInput.public_inputs,
@@ -1432,6 +1469,29 @@ export async function fetchPermissionedState(
     institution,
     permit,
     holder,
+  };
+}
+
+export async function warmOracleOnDevnet(config: SolvusConfig): Promise<{
+  publish_time: number | null;
+  refreshed_at: number;
+  expires_at: number | null;
+  live_price_e8: number | null;
+  freshness_ttl_seconds: number;
+}> {
+  if (!config.solanaWalletPath || !existsSync(config.solanaWalletPath)) {
+    throw new Error(`Missing Solana wallet at ${config.solanaWalletPath}`);
+  }
+
+  const connection = new Connection(config.solanaClusterUrl, 'confirmed');
+  const payer = await readKeypair(config.solanaWalletPath);
+  const window = await postFreshOraclePriceUpdate(connection, payer);
+  return {
+    publish_time: window.publishTime,
+    refreshed_at: window.refreshedAt,
+    expires_at: window.expiresAt,
+    live_price_e8: window.livePrice1e8,
+    freshness_ttl_seconds: PYTH_STALENESS_SECONDS,
   };
 }
 

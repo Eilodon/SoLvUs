@@ -44,6 +44,71 @@ interface ComplianceContext {
   nullifierHash: string
 }
 
+type DeskView = 'compliance' | 'operator' | 'advanced'
+
+interface InstitutionSnapshot {
+  institution_pda: string
+  institution_id_hash: string
+  approved_operator: string
+  status: 'active' | 'suspended' | 'terminated' | 'uninitialized'
+  risk_tier: number
+  daily_mint_cap: number
+  lifetime_mint_cap: number
+  minted_total: number
+  current_period_minted: number
+  travel_rule_required: boolean
+  updated_at: number
+}
+
+interface PermitSnapshot {
+  compliance_permit_pda: string
+  operator: string
+  nullifier_hash: string
+  max_amount: number
+  expires_at: number
+  kyt_score: number
+  travel_rule_ref_hash: string
+  state: 'pending' | 'used' | 'revoked'
+  issued_at: number
+  used_at: number
+}
+
+interface HolderSnapshot {
+  token_account: string
+  owner: string
+  mint: string
+  amount: string
+  frozen: boolean
+}
+
+interface ComplianceSnapshot {
+  institution: InstitutionSnapshot | null
+  permit: PermitSnapshot | null
+  holder: HolderSnapshot | null
+}
+
+interface AuditTrailRecord {
+  record_id: string
+  recorded_at: string
+  recorded_unix: number
+  event_type: string
+  institution_id_hash?: string
+  nullifier_hash?: string
+  operator?: string
+  amount?: number
+  kyt_score?: number
+  travel_rule_ref_hash?: string
+  tx_signature?: string
+  status?: string
+  owner_pubkey?: string
+}
+
+interface AuditTrailResponse {
+  institution_id_hash: string
+  record_count: number
+  records: AuditTrailRecord[]
+}
+
 interface PreparedMintResponse {
   nullifier_hash?: string
   permission_profile?: {
@@ -87,6 +152,85 @@ function buildApiHeaders(includeApiKey = false): HeadersInit {
   return headers
 }
 
+function buildRequestHeaders(includeApiKey = false, includeJson = true): HeadersInit {
+  const headers: Record<string, string> = {}
+  if (includeJson) {
+    headers['Content-Type'] = 'application/json'
+  }
+  if (includeApiKey && COMPLIANCE_API_KEY) {
+    headers['x-api-key'] = COMPLIANCE_API_KEY
+  }
+  return headers
+}
+
+function parseJsonObject<T>(value: string): T | null {
+  if (!value.trim()) {
+    return null
+  }
+  try {
+    return JSON.parse(value) as T
+  } catch {
+    return null
+  }
+}
+
+function formatUsdAmount(amount?: number | string | null): string {
+  if (amount === undefined || amount === null) {
+    return 'n/a'
+  }
+  const numeric = typeof amount === 'string' ? Number(amount) : amount
+  if (!Number.isFinite(numeric)) {
+    return 'n/a'
+  }
+  return `$${(numeric / 1_000_000).toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`
+}
+
+function formatPrice1e8(amount?: number | null): string {
+  if (amount === undefined || amount === null || !Number.isFinite(amount)) {
+    return 'n/a'
+  }
+  return `$${(amount / 100_000_000).toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`
+}
+
+function formatTimestamp(unix?: number | null): string {
+  if (!unix || !Number.isFinite(unix)) {
+    return 'n/a'
+  }
+  return new Date(unix * 1000).toLocaleString()
+}
+
+function compactHash(value?: string | null): string {
+  if (!value) {
+    return 'n/a'
+  }
+  if (value.length <= 18) {
+    return value
+  }
+  return `${value.slice(0, 10)}...${value.slice(-8)}`
+}
+
+function badgeClasses(status?: string | null): string {
+  if (status === 'active' || status === 'used' || status === 'online') {
+    return 'border-emerald-400/30 bg-emerald-300/10 text-emerald-200'
+  }
+  if (status === 'pending') {
+    return 'border-sky-400/30 bg-sky-300/10 text-sky-200'
+  }
+  if (status === 'suspended' || status === 'paused') {
+    return 'border-amber-400/30 bg-amber-300/10 text-amber-200'
+  }
+  if (status === 'revoked' || status === 'terminated' || status === 'frozen') {
+    return 'border-rose-400/30 bg-rose-300/10 text-rose-200'
+  }
+  return 'border-stone-700 bg-stone-900 text-stone-300'
+}
+
 function App() {
   const [health, setHealth] = useState<HealthResponse | null>(null)
   const [payload, setPayload] = useState(JSON.stringify({ prover_inputs: SAMPLE_PROVER_INPUTS }, null, 2))
@@ -103,8 +247,15 @@ function App() {
   const [response, setResponse] = useState('')
   const [error, setError] = useState('')
   const [walletAddress, setWalletAddress] = useState('')
+  const [activeView, setActiveView] = useState<DeskView>('compliance')
   const [complianceContext, setComplianceContext] = useState<ComplianceContext | null>(null)
   const [complianceState, setComplianceState] = useState('')
+  const [auditTrail, setAuditTrail] = useState<AuditTrailRecord[]>([])
+  const complianceSnapshot = parseJsonObject<ComplianceSnapshot>(complianceState)
+  const responseSnapshot = parseJsonObject<Record<string, unknown>>(response)
+  const institution = complianceSnapshot?.institution ?? null
+  const permit = complianceSnapshot?.permit ?? null
+  const holder = complianceSnapshot?.holder ?? null
 
   const refreshHealth = async () => {
     const res = await fetch(`${PROVER_SERVER_URL}/health`)
@@ -132,18 +283,28 @@ function App() {
   })
 
   const resolveComplianceOwner = (): string => {
-    if (!complianceState) {
+    if (!complianceSnapshot) {
       throw new Error('No compliance state loaded yet')
     }
-    const parsed = JSON.parse(complianceState) as {
-      holder?: { owner?: string }
-      institution?: { approved_operator?: string }
-    }
-    const owner = parsed.holder?.owner || parsed.institution?.approved_operator
+    const owner = complianceSnapshot.holder?.owner || complianceSnapshot.institution?.approved_operator
     if (typeof owner !== 'string' || owner.length === 0) {
       throw new Error('No holder owner found in compliance snapshot')
     }
     return owner
+  }
+
+  const syncAuditTrail = async (context: ComplianceContext) => {
+    const params = new URLSearchParams({
+      institution_id_hash: context.institutionIdHash,
+    })
+    const res = await fetch(`${PROVER_SERVER_URL}/compliance/audit-trail?${params.toString()}`, {
+      headers: buildRequestHeaders(true, false),
+    })
+    const body = (await res.json()) as AuditTrailResponse & { message?: string; error?: string }
+    if (!res.ok) {
+      throw new Error(body.message || body.error || 'Audit trail request failed')
+    }
+    setAuditTrail(body.records || [])
   }
 
   const connectPhantom = async (): Promise<PhantomProvider> => {
@@ -177,7 +338,7 @@ function App() {
     if (typeof institutionIdHash === 'string' && typeof nullifierHash === 'string') {
       const context = { institutionIdHash, nullifierHash }
       setComplianceContext(context)
-      await syncComplianceState(context)
+      await Promise.all([syncComplianceState(context), syncAuditTrail(context)])
     }
   }
 
@@ -195,7 +356,7 @@ function App() {
     if (!res.ok) {
       throw new Error(body.message || body.error || 'Compliance mutation failed')
     }
-    await syncComplianceState(complianceContext)
+    await Promise.all([syncComplianceState(complianceContext), syncAuditTrail(complianceContext)])
     setResponse(JSON.stringify(body, null, 2))
   }
 
@@ -310,6 +471,21 @@ function App() {
       const signedTransaction = await provider.signTransaction(transaction)
       const signature = await connection.sendRawTransaction(signedTransaction.serialize())
       await connection.confirmTransaction(signature, 'confirmed')
+      if (prepared.permission_profile?.institution_id_hash && prepared.nullifier_hash) {
+        const recordRes = await fetch(`${PROVER_SERVER_URL}/compliance/record-mint-submission`, {
+          method: 'POST',
+          headers: buildRequestHeaders(true),
+          body: JSON.stringify({
+            institution_id_hash: prepared.permission_profile.institution_id_hash,
+            nullifier_hash: prepared.nullifier_hash,
+            signature,
+          }),
+        })
+        if (!recordRes.ok) {
+          const body = await recordRes.json()
+          throw new Error(body.message || body.error || 'Failed to record mint submission')
+        }
+      }
 
       setResponse(
         JSON.stringify(
@@ -323,6 +499,16 @@ function App() {
       )
       setStatus('done')
       await refreshHealth()
+      const mintedContext =
+        prepared.permission_profile?.institution_id_hash && prepared.nullifier_hash
+          ? {
+              institutionIdHash: prepared.permission_profile.institution_id_hash,
+              nullifierHash: prepared.nullifier_hash,
+            }
+          : complianceContext
+      if (mintedContext) {
+        await Promise.all([syncComplianceState(mintedContext), syncAuditTrail(mintedContext)])
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown Phantom mint error'
       setError(message)
@@ -411,6 +597,7 @@ function App() {
     setError('')
     try {
       await mutateComplianceState('/compliance/freeze-holder', {
+        institution_id_hash: complianceContext?.institutionIdHash,
         owner_pubkey: resolveComplianceOwner(),
       })
       setStatus('done')
@@ -426,6 +613,7 @@ function App() {
     setError('')
     try {
       await mutateComplianceState('/compliance/thaw-holder', {
+        institution_id_hash: complianceContext?.institutionIdHash,
         owner_pubkey: resolveComplianceOwner(),
       })
       setStatus('done')
@@ -471,7 +659,7 @@ function App() {
       if (!complianceContext) {
         throw new Error('No compliance context loaded yet')
       }
-      await syncComplianceState(complianceContext)
+      await Promise.all([syncComplianceState(complianceContext), syncAuditTrail(complianceContext)])
       setStatus('done')
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown compliance refresh error'
@@ -480,306 +668,525 @@ function App() {
     }
   }
 
+  const warmOracle = async () => {
+    setStatus('loading')
+    setError('')
+    try {
+      const res = await fetch(`${PROVER_SERVER_URL}/compliance/warm-oracle`, {
+        method: 'POST',
+        headers: buildRequestHeaders(true),
+        body: JSON.stringify({}),
+      })
+      const body = await res.json()
+      if (!res.ok) {
+        throw new Error(body.message || body.error || 'Oracle warm-up failed')
+      }
+      setResponse(JSON.stringify(body, null, 2))
+      setStatus('done')
+      await refreshHealth()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown oracle warm-up error'
+      setError(message)
+      setStatus('error')
+    }
+  }
+
+  const warmProofCache = async () => {
+    setStatus('loading')
+    setError('')
+    try {
+      const res = await fetch(`${PROVER_SERVER_URL}/compliance/warm-proof`, {
+        method: 'POST',
+        headers: buildRequestHeaders(true),
+        body: JSON.stringify({}),
+      })
+      const body = await res.json()
+      if (!res.ok) {
+        throw new Error(body.message || body.error || 'Proof warm-up failed')
+      }
+      setResponse(JSON.stringify(body, null, 2))
+      setStatus('done')
+      await refreshHealth()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown proof warm-up error'
+      setError(message)
+      setStatus('error')
+    }
+  }
+
+  const exportAuditTrail = async () => {
+    setStatus('loading')
+    setError('')
+    try {
+      if (!complianceContext) {
+        throw new Error('No compliance context loaded yet')
+      }
+      const params = new URLSearchParams({
+        institution_id_hash: complianceContext.institutionIdHash,
+        format: 'csv',
+      })
+      const res = await fetch(`${PROVER_SERVER_URL}/compliance/audit-trail?${params.toString()}`, {
+        headers: buildRequestHeaders(true, false),
+      })
+      if (!res.ok) {
+        const body = await res.json()
+        throw new Error(body.message || body.error || 'Audit export failed')
+      }
+      const csv = await res.text()
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `solvus_audit_${complianceContext.institutionIdHash.slice(2, 10)}.csv`
+      anchor.click()
+      URL.revokeObjectURL(url)
+      setStatus('done')
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown audit export error'
+      setError(message)
+      setStatus('error')
+    }
+  }
+
+  const oracleLivePriceE8 =
+    typeof responseSnapshot?.oracle_live_price_e8 === 'number' ? responseSnapshot.oracle_live_price_e8 : undefined
+  const oracleMinPriceE8 =
+    typeof responseSnapshot?.oracle_min_price_e8 === 'number' ? responseSnapshot.oracle_min_price_e8 : undefined
+  const latestMintSignature =
+    typeof responseSnapshot?.submitted_signature === 'string'
+      ? responseSnapshot.submitted_signature
+      : typeof responseSnapshot?.signature === 'string'
+        ? responseSnapshot.signature
+        : undefined
+
   return (
     <div className="min-h-screen bg-stone-950 text-stone-100">
-      <div className="mx-auto flex max-w-6xl flex-col gap-10 px-4 py-10 md:px-8">
-        <header className="rounded-[2rem] border border-amber-200/10 bg-[radial-gradient(circle_at_top_left,_rgba(245,158,11,0.18),_transparent_45%),linear-gradient(135deg,_rgba(12,10,9,0.98),_rgba(28,25,23,0.94))] p-8 shadow-2xl shadow-black/30">
-          <div className="flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
-            <div className="max-w-2xl">
-              <p className="text-xs font-semibold uppercase tracking-[0.35em] text-amber-300/80">Solvus Protocol</p>
-              <h1 className="mt-3 text-4xl font-black tracking-tight text-stone-50 md:text-5xl">Institutional Issuance Vault Desk</h1>
+      <div className="mx-auto flex max-w-7xl flex-col gap-8 px-4 py-8 md:px-8">
+        <header className="rounded-[2rem] border border-amber-200/10 bg-[radial-gradient(circle_at_top_left,_rgba(245,158,11,0.18),_transparent_40%),linear-gradient(135deg,_rgba(12,10,9,0.98),_rgba(28,25,23,0.94))] p-8 shadow-2xl shadow-black/30">
+          <div className="flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
+            <div className="max-w-3xl">
+              <p className="text-xs font-semibold uppercase tracking-[0.35em] text-amber-300/80">StableHacks 2026 / Institutional Vaults</p>
+              <h1 className="mt-3 text-4xl font-black tracking-tight text-stone-50 md:text-5xl">
+                AMINA-Style BTC-Backed Issuance Control Plane
+              </h1>
               <p className="mt-4 text-sm leading-7 text-stone-300">
-                UI này demo flow permissioned mint cho regulated operator: compliance metadata -&gt; prover bundle -&gt; permit issuance -&gt; Solana mint.
+                SoLvUs packages a real Groth16-backed mint flow into two operational surfaces: a compliance desk for institution controls and an operator desk for permit-bound issuance. The raw debug desk remains available under Advanced.
               </p>
             </div>
-            <div className="grid gap-3 rounded-3xl border border-amber-300/10 bg-stone-900/70 p-5 text-sm text-stone-300">
-              <div className="flex items-center justify-between gap-8">
-                <span>Prover Server</span>
-                <span className="font-mono text-amber-200">{PROVER_SERVER_URL}</span>
-              </div>
-              <div className="flex items-center justify-between gap-8">
-                <span>Backend</span>
-                <span className="font-mono text-emerald-300">{String(health?.prover_backend || 'unknown')}</span>
-              </div>
-              <div className="flex items-center justify-between gap-8">
-                <span>Adapter</span>
-                <span className="font-mono text-amber-200">{String(health?.prover_adapter_mode || 'unknown')}</span>
-              </div>
-              <div className="flex items-center justify-between gap-8">
-                <span>Status</span>
-                <span className="font-mono text-sky-300">{health ? 'online' : 'pending'}</span>
-              </div>
-              <div className="flex items-center justify-between gap-8">
-                <span>Compliance Auth</span>
-                <span className="font-mono text-amber-200">
-                  {health?.compliance_api_key_configured ? 'api-key required' : 'missing'}
-                </span>
-              </div>
-              <div className="flex items-center justify-between gap-8">
-                <span>Solvus Program</span>
-                <span className="font-mono text-cyan-200">{String(health?.solvus_program_id || 'unknown')}</span>
-              </div>
-              <div className="flex items-center justify-between gap-8">
-                <span>Wallet</span>
-                <span className="font-mono text-fuchsia-200">{walletAddress || 'browser wallet disconnected'}</span>
-              </div>
+            <div className="grid gap-3 rounded-3xl border border-amber-300/10 bg-stone-900/70 p-5 text-sm text-stone-300 xl:min-w-[22rem]">
+              {[
+                ['Prover Server', PROVER_SERVER_URL],
+                ['Backend', String(health?.prover_backend || 'unknown')],
+                ['Adapter', String(health?.prover_adapter_mode || 'unknown')],
+                ['Status', health ? 'online' : 'pending'],
+                ['Compliance Auth', health?.compliance_api_key_configured ? 'api-key required' : 'missing'],
+                ['Program', String(health?.solvus_program_id || 'unknown')],
+                ['Wallet', walletAddress || 'browser wallet disconnected'],
+              ].map(([label, value]) => (
+                <div key={label} className="flex items-center justify-between gap-8">
+                  <span>{label}</span>
+                  <span className="font-mono text-right text-amber-200">{value}</span>
+                </div>
+              ))}
             </div>
           </div>
         </header>
 
-        <section className="grid gap-4 md:grid-cols-4">
-          {[
-            ['Policy', 'Institution profile, KYB hash, Travel Rule reference, capped permit window'],
-            ['Identity', 'Compact secp256k1 user signature -> SHA-512 nullifier secret'],
-            ['Prover', 'Noir inputs, asset-bound nullifier, cached /prove request'],
-            ['Solana', 'Permissioned mint gate on top of Anchor vault state machine'],
-          ].map(([title, desc]) => (
-            <article key={title} className="rounded-[1.5rem] border border-stone-800 bg-stone-900/70 p-5">
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">{title}</p>
-              <p className="mt-3 text-sm leading-6 text-stone-300">{desc}</p>
-            </article>
+        <nav className="flex flex-wrap gap-3">
+          {([
+            ['compliance', 'Compliance'],
+            ['operator', 'Operator'],
+            ['advanced', 'Advanced'],
+          ] as Array<[DeskView, string]>).map(([view, label]) => (
+            <button
+              key={view}
+              onClick={() => setActiveView(view)}
+              className={`rounded-full px-5 py-2 text-sm font-bold transition ${
+                activeView === view
+                  ? 'bg-amber-300 text-stone-950'
+                  : 'border border-stone-700 bg-stone-900 text-stone-300 hover:border-amber-300/40 hover:text-stone-100'
+              }`}
+            >
+              {label}
+            </button>
           ))}
-        </section>
+        </nav>
 
-        <section className="grid gap-8 lg:grid-cols-[1.15fr_0.85fr]">
-          <article className="rounded-[2rem] border border-stone-800 bg-stone-900/70 p-6">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.25em] text-cyan-300/80">POST /prove</p>
-                <h2 className="mt-2 text-2xl font-bold text-stone-50">Permissioned Mint Composer</h2>
-              </div>
-              <div className="flex flex-wrap gap-3">
-                <button
-                  onClick={() => {
-                    setStatus('loading')
-                    setError('')
-                    connectPhantom()
-                      .then(() => setStatus('done'))
-                      .catch((err) => {
-                        setError(err instanceof Error ? err.message : 'Unknown Phantom connect error')
-                        setStatus('error')
-                      })
-                  }}
-                  disabled={status === 'loading'}
-                  className="rounded-full border border-fuchsia-300/40 bg-fuchsia-300/10 px-5 py-2 text-sm font-bold text-fuchsia-100 transition hover:bg-fuchsia-300/20 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  Connect Browser Wallet
-                </button>
-                <button
-                  onClick={submitProof}
-                  disabled={status === 'loading'}
-                  className="rounded-full bg-cyan-300 px-5 py-2 text-sm font-bold text-stone-950 transition hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {status === 'loading' ? 'Working...' : 'Generate Proof'}
-                </button>
-              </div>
-            </div>
-
-            <p className="mt-4 text-sm leading-6 text-stone-400">
-              `CLI Mint On Devnet` dùng ví admin/compliance cục bộ. `Mint With Browser Wallet` dùng browser wallet để demo operator flow; production path có thể thay bước ký này bằng MPC hoặc HSM-backed custody.
-            </p>
-
-            <div className="mt-5 grid gap-3 rounded-[1.5rem] border border-stone-800 bg-stone-950/60 p-4 lg:grid-cols-[auto_auto_1fr] lg:items-center">
-              <label className="flex items-center gap-3 text-sm text-stone-300">
-                <span>zkUSD Amount</span>
-                <input
-                  value={zkusdAmount}
-                  onChange={(event) => setZkusdAmount(event.target.value)}
-                  className="w-36 rounded-full border border-stone-700 bg-stone-900 px-4 py-2 font-mono text-xs text-stone-100 outline-none"
-                />
-              </label>
-              <label className="flex items-center gap-3 text-sm text-stone-300">
-                <span>Min BTC Price 1e8</span>
-                <input
-                  value={minBtcPriceE8}
-                  onChange={(event) => setMinBtcPriceE8(event.target.value)}
-                  placeholder="auto from oracle"
-                  className="w-40 rounded-full border border-stone-700 bg-stone-900 px-4 py-2 font-mono text-xs text-stone-100 outline-none"
-                />
-              </label>
-              <div className="flex flex-wrap gap-3">
-                <button
-                  onClick={mintOnDevnet}
-                  disabled={status === 'loading'}
-                  className="rounded-full bg-emerald-300 px-5 py-2 text-sm font-bold text-stone-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  CLI Mint On Devnet
-                </button>
-                <button
-                  onClick={mintWithPhantom}
-                  disabled={status === 'loading'}
-                  className="rounded-full bg-fuchsia-300 px-5 py-2 text-sm font-bold text-stone-950 transition hover:bg-fuchsia-200 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  Mint With Browser Wallet
-                </button>
-              </div>
-              <p className="text-xs leading-6 text-stone-500">
-                Server vẫn là fee payer và compliance admin. Browser wallet chỉ ký operator leg nên user không phải nạp devnet SOL để test policy-gated flow.
-              </p>
-            </div>
-
-            <div className="mt-5 grid gap-3 rounded-[1.5rem] border border-amber-300/10 bg-stone-950/70 p-4 md:grid-cols-2">
-              <label className="grid gap-2 text-sm text-stone-300">
-                <span>Institution Label</span>
-                <input
-                  value={institutionName}
-                  onChange={(event) => setInstitutionName(event.target.value)}
-                  className="rounded-2xl border border-stone-700 bg-stone-900 px-4 py-3 text-sm text-stone-100 outline-none"
-                />
-              </label>
-              <label className="grid gap-2 text-sm text-stone-300">
-                <span>KYB Reference</span>
-                <input
-                  value={kybReference}
-                  onChange={(event) => setKybReference(event.target.value)}
-                  className="rounded-2xl border border-stone-700 bg-stone-900 px-4 py-3 text-sm text-stone-100 outline-none"
-                />
-              </label>
-              <label className="grid gap-2 text-sm text-stone-300">
-                <span>Travel Rule Reference</span>
-                <input
-                  value={travelRuleReference}
-                  onChange={(event) => setTravelRuleReference(event.target.value)}
-                  className="rounded-2xl border border-stone-700 bg-stone-900 px-4 py-3 text-sm text-stone-100 outline-none"
-                />
-              </label>
-              <label className="grid gap-2 text-sm text-stone-300">
-                <span>KYT Score</span>
-                <input
-                  value={kytScore}
-                  onChange={(event) => setKytScore(event.target.value)}
-                  className="rounded-2xl border border-stone-700 bg-stone-900 px-4 py-3 text-sm text-stone-100 outline-none"
-                />
-              </label>
-              <label className="grid gap-2 text-sm text-stone-300">
-                <span>Permit TTL Seconds</span>
-                <input
-                  value={permitTtlSeconds}
-                  onChange={(event) => setPermitTtlSeconds(event.target.value)}
-                  className="rounded-2xl border border-stone-700 bg-stone-900 px-4 py-3 text-sm text-stone-100 outline-none"
-                />
-              </label>
-              <label className="grid gap-2 text-sm text-stone-300">
-                <span>Daily Mint Cap</span>
-                <input
-                  value={dailyMintCap}
-                  onChange={(event) => setDailyMintCap(event.target.value)}
-                  className="rounded-2xl border border-stone-700 bg-stone-900 px-4 py-3 text-sm text-stone-100 outline-none"
-                />
-              </label>
-              <label className="grid gap-2 text-sm text-stone-300 md:col-span-2">
-                <span>Lifetime Mint Cap</span>
-                <input
-                  value={lifetimeMintCap}
-                  onChange={(event) => setLifetimeMintCap(event.target.value)}
-                  className="rounded-2xl border border-stone-700 bg-stone-900 px-4 py-3 text-sm text-stone-100 outline-none"
-                />
-              </label>
-            </div>
-
-            <textarea
-              value={payload}
-              onChange={(event) => setPayload(event.target.value)}
-              className="mt-5 min-h-[28rem] w-full rounded-[1.5rem] border border-stone-800 bg-stone-950/80 p-4 font-mono text-xs leading-6 text-stone-200 outline-none ring-0"
-              spellCheck={false}
-            />
+        <section className="grid gap-4 md:grid-cols-4">
+          <article className="rounded-[1.5rem] border border-stone-800 bg-stone-900/70 p-5">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Institution</p>
+            <p className="mt-3 text-lg font-bold text-stone-50">{institution?.status ? institution.status.toUpperCase() : 'NOT LOADED'}</p>
+            <p className="mt-2 text-sm text-stone-400">{institution ? compactHash(institution.institution_id_hash) : 'Prepare or mint to provision one.'}</p>
           </article>
-
-          <aside className="grid gap-6">
-            <article className="rounded-[2rem] border border-amber-300/20 bg-amber-950/10 p-6">
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-xs font-semibold uppercase tracking-[0.25em] text-amber-300/80">Compliance Audit</p>
-                <button
-                  onClick={refreshAuditDashboard}
-                  disabled={status === 'loading' || !complianceContext}
-                  className="rounded-full border border-amber-300/30 bg-amber-300/10 px-4 py-2 text-xs font-bold text-amber-100 transition hover:bg-amber-300/20 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Refresh
-                </button>
-              </div>
-              <div className="mt-4 flex flex-wrap gap-3">
-                <button
-                  onClick={suspendInstitution}
-                  disabled={status === 'loading' || !complianceContext}
-                  className="rounded-full bg-red-300 px-4 py-2 text-xs font-bold text-stone-950 transition hover:bg-red-200 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Suspend Institution
-                </button>
-                <button
-                  onClick={activateInstitution}
-                  disabled={status === 'loading' || !complianceContext}
-                  className="rounded-full bg-emerald-300 px-4 py-2 text-xs font-bold text-stone-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Reactivate
-                </button>
-                <button
-                  onClick={terminateInstitution}
-                  disabled={status === 'loading' || !complianceContext}
-                  className="rounded-full bg-stone-200 px-4 py-2 text-xs font-bold text-stone-950 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Terminate Institution
-                </button>
-                <button
-                  onClick={revokePermit}
-                  disabled={status === 'loading' || !complianceContext}
-                  className="rounded-full bg-amber-300 px-4 py-2 text-xs font-bold text-stone-950 transition hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Revoke Permit
-                </button>
-                <button
-                  onClick={freezeHolder}
-                  disabled={status === 'loading' || !complianceContext}
-                  className="rounded-full bg-rose-300 px-4 py-2 text-xs font-bold text-stone-950 transition hover:bg-rose-200 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Freeze Holder
-                </button>
-                <button
-                  onClick={thawHolder}
-                  disabled={status === 'loading' || !complianceContext}
-                  className="rounded-full bg-lime-300 px-4 py-2 text-xs font-bold text-stone-950 transition hover:bg-lime-200 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Thaw Holder
-                </button>
-                <button
-                  onClick={pauseProtocol}
-                  disabled={status === 'loading' || !complianceContext}
-                  className="rounded-full bg-violet-300 px-4 py-2 text-xs font-bold text-stone-950 transition hover:bg-violet-200 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Pause Protocol
-                </button>
-                <button
-                  onClick={resumeProtocol}
-                  disabled={status === 'loading' || !complianceContext}
-                  className="rounded-full bg-sky-300 px-4 py-2 text-xs font-bold text-stone-950 transition hover:bg-sky-200 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Resume Protocol
-                </button>
-              </div>
-              <pre className="mt-4 min-h-[14rem] overflow-auto rounded-[1.25rem] bg-stone-950/80 p-4 text-xs leading-6 text-stone-200">
-                {complianceState || 'Prepare or mint once to load institution and permit state.'}
-              </pre>
-            </article>
-
-            <article className="rounded-[2rem] border border-stone-800 bg-stone-900/70 p-6">
-              <p className="text-xs font-semibold uppercase tracking-[0.25em] text-stone-500">Health</p>
-              <pre className="mt-4 overflow-auto rounded-[1.25rem] bg-stone-950/80 p-4 text-xs leading-6 text-stone-200">
-                {JSON.stringify(health, null, 2)}
-              </pre>
-            </article>
-
-            <article className="rounded-[2rem] border border-stone-800 bg-stone-900/70 p-6">
-              <p className="text-xs font-semibold uppercase tracking-[0.25em] text-emerald-300/80">Response</p>
-              <pre className="mt-4 min-h-[12rem] overflow-auto rounded-[1.25rem] bg-stone-950/80 p-4 text-xs leading-6 text-stone-200">
-                {response || 'No proof or mint response yet.'}
-              </pre>
-            </article>
-
-            <article className="rounded-[2rem] border border-red-500/20 bg-red-950/20 p-6">
-              <p className="text-xs font-semibold uppercase tracking-[0.25em] text-red-300/80">Error</p>
-              <p className="mt-4 text-sm leading-6 text-red-200">{error || 'No errors.'}</p>
-            </article>
-          </aside>
+          <article className="rounded-[1.5rem] border border-stone-800 bg-stone-900/70 p-5">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Permit</p>
+            <p className="mt-3 text-lg font-bold text-stone-50">{permit?.state ? permit.state.toUpperCase() : 'NOT LOADED'}</p>
+            <p className="mt-2 text-sm text-stone-400">{permit ? `${formatUsdAmount(permit.max_amount)} / score ${permit.kyt_score}` : 'Travel Rule + KYT gate pending.'}</p>
+          </article>
+          <article className="rounded-[1.5rem] border border-stone-800 bg-stone-900/70 p-5">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Oracle Guard</p>
+            <p className="mt-3 text-lg font-bold text-stone-50">{formatPrice1e8(oracleMinPriceE8 || oracleLivePriceE8)}</p>
+            <p className="mt-2 text-sm text-stone-400">Live {formatPrice1e8(oracleLivePriceE8)} / floor {formatPrice1e8(oracleMinPriceE8)}</p>
+          </article>
+          <article className="rounded-[1.5rem] border border-stone-800 bg-stone-900/70 p-5">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Audit Trail</p>
+            <p className="mt-3 text-lg font-bold text-stone-50">{auditTrail.length} records</p>
+            <p className="mt-2 text-sm text-stone-400">{latestMintSignature ? `Latest tx ${compactHash(latestMintSignature)}` : 'No recorded mint tx yet.'}</p>
+          </article>
         </section>
+
+        {activeView === 'compliance' && (
+          <section className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+            <div className="grid gap-6">
+              <article className="rounded-[2rem] border border-amber-300/20 bg-amber-950/10 p-6">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.25em] text-amber-300/80">Compliance Officer</p>
+                    <h2 className="mt-2 text-2xl font-bold text-stone-50">Institution Control Desk</h2>
+                  </div>
+                  <div className="flex flex-wrap gap-3">
+                    <button
+                      onClick={refreshAuditDashboard}
+                      disabled={status === 'loading' || !complianceContext}
+                      className="rounded-full border border-amber-300/30 bg-amber-300/10 px-4 py-2 text-xs font-bold text-amber-100 transition hover:bg-amber-300/20 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Refresh
+                    </button>
+                    <button
+                      onClick={exportAuditTrail}
+                      disabled={status === 'loading' || !complianceContext}
+                      className="rounded-full border border-sky-300/30 bg-sky-300/10 px-4 py-2 text-xs font-bold text-sky-100 transition hover:bg-sky-300/20 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Export CSV
+                    </button>
+                    <button
+                      onClick={warmOracle}
+                      disabled={status === 'loading'}
+                      className="rounded-full border border-stone-700 bg-stone-900 px-4 py-2 text-xs font-bold text-stone-200 transition hover:border-amber-300/40 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Warm Oracle
+                    </button>
+                    <button
+                      onClick={warmProofCache}
+                      disabled={status === 'loading'}
+                      className="rounded-full border border-stone-700 bg-stone-900 px-4 py-2 text-xs font-bold text-stone-200 transition hover:border-amber-300/40 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Warm Proof
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mt-6 grid gap-4 md:grid-cols-2">
+                  <div className="rounded-[1.5rem] border border-stone-800 bg-stone-950/70 p-5">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Institution</p>
+                      <span className={`rounded-full border px-3 py-1 text-xs font-bold ${badgeClasses(institution?.status)}`}>
+                        {institution?.status || 'unloaded'}
+                      </span>
+                    </div>
+                    <dl className="mt-4 grid gap-3 text-sm text-stone-300">
+                      <div className="flex items-center justify-between gap-4">
+                        <dt>Institution ID</dt>
+                        <dd className="font-mono text-stone-100">{compactHash(institution?.institution_id_hash)}</dd>
+                      </div>
+                      <div className="flex items-center justify-between gap-4">
+                        <dt>Approved Operator</dt>
+                        <dd className="font-mono text-stone-100">{compactHash(institution?.approved_operator)}</dd>
+                      </div>
+                      <div className="flex items-center justify-between gap-4">
+                        <dt>Daily Cap</dt>
+                        <dd>{formatUsdAmount(institution?.daily_mint_cap)}</dd>
+                      </div>
+                      <div className="flex items-center justify-between gap-4">
+                        <dt>Lifetime Cap</dt>
+                        <dd>{formatUsdAmount(institution?.lifetime_mint_cap)}</dd>
+                      </div>
+                      <div className="flex items-center justify-between gap-4">
+                        <dt>Minted Total</dt>
+                        <dd>{formatUsdAmount(institution?.minted_total)}</dd>
+                      </div>
+                      <div className="flex items-center justify-between gap-4">
+                        <dt>Current Period</dt>
+                        <dd>{formatUsdAmount(institution?.current_period_minted)}</dd>
+                      </div>
+                    </dl>
+                  </div>
+
+                  <div className="rounded-[1.5rem] border border-stone-800 bg-stone-950/70 p-5">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Active Permit</p>
+                      <span className={`rounded-full border px-3 py-1 text-xs font-bold ${badgeClasses(permit?.state)}`}>
+                        {permit?.state || 'unloaded'}
+                      </span>
+                    </div>
+                    <dl className="mt-4 grid gap-3 text-sm text-stone-300">
+                      <div className="flex items-center justify-between gap-4">
+                        <dt>Nullifier</dt>
+                        <dd className="font-mono text-stone-100">{compactHash(permit?.nullifier_hash)}</dd>
+                      </div>
+                      <div className="flex items-center justify-between gap-4">
+                        <dt>Max Amount</dt>
+                        <dd>{formatUsdAmount(permit?.max_amount)}</dd>
+                      </div>
+                      <div className="flex items-center justify-between gap-4">
+                        <dt>KYT Score</dt>
+                        <dd>{permit?.kyt_score ?? 'n/a'}</dd>
+                      </div>
+                      <div className="flex items-center justify-between gap-4">
+                        <dt>Travel Rule</dt>
+                        <dd className="font-mono text-stone-100">{compactHash(permit?.travel_rule_ref_hash)}</dd>
+                      </div>
+                      <div className="flex items-center justify-between gap-4">
+                        <dt>Expires</dt>
+                        <dd>{formatTimestamp(permit?.expires_at)}</dd>
+                      </div>
+                      <div className="flex items-center justify-between gap-4">
+                        <dt>Holder</dt>
+                        <dd>{holder ? formatUsdAmount(holder.amount) : 'n/a'}</dd>
+                      </div>
+                    </dl>
+                  </div>
+                </div>
+
+                <div className="mt-6 flex flex-wrap gap-3">
+                  <button onClick={suspendInstitution} disabled={status === 'loading' || !complianceContext} className="rounded-full bg-red-300 px-4 py-2 text-xs font-bold text-stone-950 transition hover:bg-red-200 disabled:cursor-not-allowed disabled:opacity-50">Suspend Institution</button>
+                  <button onClick={activateInstitution} disabled={status === 'loading' || !complianceContext} className="rounded-full bg-emerald-300 px-4 py-2 text-xs font-bold text-stone-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-50">Reactivate</button>
+                  <button onClick={terminateInstitution} disabled={status === 'loading' || !complianceContext} className="rounded-full bg-stone-200 px-4 py-2 text-xs font-bold text-stone-950 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-50">Terminate</button>
+                  <button onClick={revokePermit} disabled={status === 'loading' || !complianceContext} className="rounded-full bg-amber-300 px-4 py-2 text-xs font-bold text-stone-950 transition hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-50">Revoke Permit</button>
+                  <button onClick={freezeHolder} disabled={status === 'loading' || !complianceContext} className="rounded-full bg-rose-300 px-4 py-2 text-xs font-bold text-stone-950 transition hover:bg-rose-200 disabled:cursor-not-allowed disabled:opacity-50">Freeze Holder</button>
+                  <button onClick={thawHolder} disabled={status === 'loading' || !complianceContext} className="rounded-full bg-lime-300 px-4 py-2 text-xs font-bold text-stone-950 transition hover:bg-lime-200 disabled:cursor-not-allowed disabled:opacity-50">Thaw Holder</button>
+                  <button onClick={pauseProtocol} disabled={status === 'loading'} className="rounded-full bg-violet-300 px-4 py-2 text-xs font-bold text-stone-950 transition hover:bg-violet-200 disabled:cursor-not-allowed disabled:opacity-50">Pause Protocol</button>
+                  <button onClick={resumeProtocol} disabled={status === 'loading'} className="rounded-full bg-sky-300 px-4 py-2 text-xs font-bold text-stone-950 transition hover:bg-sky-200 disabled:cursor-not-allowed disabled:opacity-50">Resume Protocol</button>
+                </div>
+              </article>
+
+              <article className="rounded-[2rem] border border-stone-800 bg-stone-900/70 p-6">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.25em] text-stone-500">Compliance Audit Trail</p>
+                    <h3 className="mt-2 text-xl font-bold text-stone-50">Institution Timeline</h3>
+                  </div>
+                  <span className="rounded-full border border-stone-700 bg-stone-950 px-3 py-1 text-xs font-bold text-stone-300">{auditTrail.length} records</span>
+                </div>
+                <div className="mt-5 grid gap-3">
+                  {auditTrail.length > 0 ? auditTrail.map((record) => (
+                    <div key={record.record_id} className="rounded-[1.25rem] border border-stone-800 bg-stone-950/80 p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <span className={`rounded-full border px-3 py-1 text-xs font-bold ${badgeClasses(record.status || record.event_type.toLowerCase())}`}>
+                          {record.event_type}
+                        </span>
+                        <span className="text-xs text-stone-500">{new Date(record.recorded_at).toLocaleString()}</span>
+                      </div>
+                      <div className="mt-3 grid gap-2 text-sm text-stone-300 md:grid-cols-2">
+                        <div>Operator: <span className="font-mono text-stone-100">{compactHash(record.operator || record.owner_pubkey)}</span></div>
+                        <div>Amount: <span className="text-stone-100">{formatUsdAmount(record.amount)}</span></div>
+                        <div>KYT: <span className="text-stone-100">{record.kyt_score ?? 'n/a'}</span></div>
+                        <div>Tx: <span className="font-mono text-stone-100">{compactHash(record.tx_signature)}</span></div>
+                      </div>
+                    </div>
+                  )) : (
+                    <div className="rounded-[1.25rem] border border-dashed border-stone-800 bg-stone-950/60 p-5 text-sm text-stone-500">
+                      No audit records yet. Prepare or execute a mint to populate the compliance journal.
+                    </div>
+                  )}
+                </div>
+              </article>
+            </div>
+
+            <aside className="grid gap-6">
+              <article className="rounded-[2rem] border border-stone-800 bg-stone-900/70 p-6">
+                <p className="text-xs font-semibold uppercase tracking-[0.25em] text-stone-500">Current Snapshot</p>
+                <pre className="mt-4 min-h-[18rem] overflow-auto rounded-[1.25rem] bg-stone-950/80 p-4 text-xs leading-6 text-stone-200">
+                  {complianceState || 'Prepare or mint once to load institution and permit state.'}
+                </pre>
+              </article>
+              <article className="rounded-[2rem] border border-stone-800 bg-stone-900/70 p-6">
+                <p className="text-xs font-semibold uppercase tracking-[0.25em] text-emerald-300/80">Latest Response</p>
+                <pre className="mt-4 min-h-[12rem] overflow-auto rounded-[1.25rem] bg-stone-950/80 p-4 text-xs leading-6 text-stone-200">
+                  {response || 'No proof or mint response yet.'}
+                </pre>
+              </article>
+            </aside>
+          </section>
+        )}
+
+        {activeView === 'operator' && (
+          <section className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+            <article className="rounded-[2rem] border border-stone-800 bg-stone-900/70 p-6">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.25em] text-cyan-300/80">Operator Mint Desk</p>
+                  <h2 className="mt-2 text-2xl font-bold text-stone-50">Permit-Bound Issuance</h2>
+                </div>
+                <div className="flex flex-wrap gap-3">
+                  <button
+                    onClick={() => {
+                      setStatus('loading')
+                      setError('')
+                      connectPhantom()
+                        .then(() => setStatus('done'))
+                        .catch((err) => {
+                          setError(err instanceof Error ? err.message : 'Unknown Phantom connect error')
+                          setStatus('error')
+                        })
+                    }}
+                    disabled={status === 'loading'}
+                    className="rounded-full border border-fuchsia-300/40 bg-fuchsia-300/10 px-5 py-2 text-sm font-bold text-fuchsia-100 transition hover:bg-fuchsia-300/20 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Connect Browser Wallet
+                  </button>
+                  <button
+                    onClick={submitProof}
+                    disabled={status === 'loading'}
+                    className="rounded-full bg-cyan-300 px-5 py-2 text-sm font-bold text-stone-950 transition hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {status === 'loading' ? 'Working...' : 'Generate Proof'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-6 grid gap-4 md:grid-cols-3">
+                <div className="rounded-[1.5rem] border border-stone-800 bg-stone-950/70 p-5">
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Collateral Check</p>
+                  <p className="mt-3 text-lg font-bold text-stone-50">{formatPrice1e8(oracleLivePriceE8)}</p>
+                  <p className="mt-2 text-sm text-stone-400">Pyth live BTC/USD / floor {formatPrice1e8(oracleMinPriceE8)}</p>
+                </div>
+                <div className="rounded-[1.5rem] border border-stone-800 bg-stone-950/70 p-5">
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Active Permit</p>
+                  <p className="mt-3 text-lg font-bold text-stone-50">{formatUsdAmount(permit?.max_amount)}</p>
+                  <p className="mt-2 text-sm text-stone-400">Expires {formatTimestamp(permit?.expires_at)}</p>
+                </div>
+                <div className="rounded-[1.5rem] border border-stone-800 bg-stone-950/70 p-5">
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Holder Balance</p>
+                  <p className="mt-3 text-lg font-bold text-stone-50">{formatUsdAmount(holder?.amount)}</p>
+                  <p className="mt-2 text-sm text-stone-400">{holder?.frozen ? 'Account frozen by compliance' : 'Transfer account active'}</p>
+                </div>
+              </div>
+
+              <div className="mt-6 grid gap-4 rounded-[1.5rem] border border-stone-800 bg-stone-950/60 p-5 md:grid-cols-2">
+                <label className="grid gap-2 text-sm text-stone-300">
+                  <span>Institution Label</span>
+                  <input value={institutionName} onChange={(event) => setInstitutionName(event.target.value)} className="rounded-2xl border border-stone-700 bg-stone-900 px-4 py-3 text-sm text-stone-100 outline-none" />
+                </label>
+                <label className="grid gap-2 text-sm text-stone-300">
+                  <span>KYB Reference</span>
+                  <input value={kybReference} onChange={(event) => setKybReference(event.target.value)} className="rounded-2xl border border-stone-700 bg-stone-900 px-4 py-3 text-sm text-stone-100 outline-none" />
+                </label>
+                <label className="grid gap-2 text-sm text-stone-300">
+                  <span>Travel Rule Reference</span>
+                  <input value={travelRuleReference} onChange={(event) => setTravelRuleReference(event.target.value)} className="rounded-2xl border border-stone-700 bg-stone-900 px-4 py-3 text-sm text-stone-100 outline-none" />
+                </label>
+                <label className="grid gap-2 text-sm text-stone-300">
+                  <span>KYT Score</span>
+                  <input value={kytScore} onChange={(event) => setKytScore(event.target.value)} className="rounded-2xl border border-stone-700 bg-stone-900 px-4 py-3 text-sm text-stone-100 outline-none" />
+                </label>
+                <label className="grid gap-2 text-sm text-stone-300">
+                  <span>Permit TTL Seconds</span>
+                  <input value={permitTtlSeconds} onChange={(event) => setPermitTtlSeconds(event.target.value)} className="rounded-2xl border border-stone-700 bg-stone-900 px-4 py-3 text-sm text-stone-100 outline-none" />
+                </label>
+                <label className="grid gap-2 text-sm text-stone-300">
+                  <span>zkUSD Amount</span>
+                  <input value={zkusdAmount} onChange={(event) => setZkusdAmount(event.target.value)} className="rounded-2xl border border-stone-700 bg-stone-900 px-4 py-3 text-sm text-stone-100 outline-none" />
+                </label>
+                <label className="grid gap-2 text-sm text-stone-300">
+                  <span>Daily Mint Cap</span>
+                  <input value={dailyMintCap} onChange={(event) => setDailyMintCap(event.target.value)} className="rounded-2xl border border-stone-700 bg-stone-900 px-4 py-3 text-sm text-stone-100 outline-none" />
+                </label>
+                <label className="grid gap-2 text-sm text-stone-300">
+                  <span>Lifetime Mint Cap</span>
+                  <input value={lifetimeMintCap} onChange={(event) => setLifetimeMintCap(event.target.value)} className="rounded-2xl border border-stone-700 bg-stone-900 px-4 py-3 text-sm text-stone-100 outline-none" />
+                </label>
+                <label className="grid gap-2 text-sm text-stone-300 md:col-span-2">
+                  <span>Min BTC Price 1e8</span>
+                  <input value={minBtcPriceE8} onChange={(event) => setMinBtcPriceE8(event.target.value)} placeholder="auto from oracle" className="rounded-2xl border border-stone-700 bg-stone-900 px-4 py-3 text-sm text-stone-100 outline-none" />
+                </label>
+              </div>
+
+              <div className="mt-6 flex flex-wrap gap-3">
+                <button onClick={mintOnDevnet} disabled={status === 'loading'} className="rounded-full bg-emerald-300 px-5 py-2 text-sm font-bold text-stone-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-60">CLI Mint On Devnet</button>
+                <button onClick={mintWithPhantom} disabled={status === 'loading'} className="rounded-full bg-fuchsia-300 px-5 py-2 text-sm font-bold text-stone-950 transition hover:bg-fuchsia-200 disabled:cursor-not-allowed disabled:opacity-60">Mint With Browser Wallet</button>
+                <button onClick={warmOracle} disabled={status === 'loading'} className="rounded-full border border-stone-700 bg-stone-900 px-5 py-2 text-sm font-bold text-stone-200 transition hover:border-amber-300/40 disabled:cursor-not-allowed disabled:opacity-60">Warm Oracle</button>
+                <button onClick={warmProofCache} disabled={status === 'loading'} className="rounded-full border border-stone-700 bg-stone-900 px-5 py-2 text-sm font-bold text-stone-200 transition hover:border-amber-300/40 disabled:cursor-not-allowed disabled:opacity-60">Warm Proof</button>
+              </div>
+            </article>
+
+            <aside className="grid gap-6">
+              <article className="rounded-[2rem] border border-stone-800 bg-stone-900/70 p-6">
+                <p className="text-xs font-semibold uppercase tracking-[0.25em] text-stone-500">Operator Brief</p>
+                <div className="mt-4 grid gap-4 text-sm text-stone-300">
+                  <div className="rounded-[1.25rem] border border-stone-800 bg-stone-950/70 p-4">
+                    <p className="text-xs uppercase tracking-[0.2em] text-stone-500">Institution</p>
+                    <p className="mt-2 font-mono text-stone-100">{compactHash(institution?.institution_id_hash)}</p>
+                  </div>
+                  <div className="rounded-[1.25rem] border border-stone-800 bg-stone-950/70 p-4">
+                    <p className="text-xs uppercase tracking-[0.2em] text-stone-500">Permit</p>
+                    <p className="mt-2 font-mono text-stone-100">{compactHash(permit?.nullifier_hash)}</p>
+                    <p className="mt-1 text-stone-400">Travel Rule {compactHash(permit?.travel_rule_ref_hash)}</p>
+                  </div>
+                  <div className="rounded-[1.25rem] border border-stone-800 bg-stone-950/70 p-4">
+                    <p className="text-xs uppercase tracking-[0.2em] text-stone-500">Latest Signature</p>
+                    <p className="mt-2 font-mono text-stone-100">{compactHash(latestMintSignature)}</p>
+                  </div>
+                </div>
+              </article>
+
+              <article className="rounded-[2rem] border border-stone-800 bg-stone-900/70 p-6">
+                <p className="text-xs font-semibold uppercase tracking-[0.25em] text-emerald-300/80">Latest Response</p>
+                <pre className="mt-4 min-h-[16rem] overflow-auto rounded-[1.25rem] bg-stone-950/80 p-4 text-xs leading-6 text-stone-200">
+                  {response || 'No proof or mint response yet.'}
+                </pre>
+              </article>
+            </aside>
+          </section>
+        )}
+
+        {activeView === 'advanced' && (
+          <section className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+            <article className="rounded-[2rem] border border-stone-800 bg-stone-900/70 p-6">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.25em] text-stone-500">Advanced Desk</p>
+                  <h2 className="mt-2 text-2xl font-bold text-stone-50">Raw Payload + Debug Surface</h2>
+                </div>
+                <button onClick={submitProof} disabled={status === 'loading'} className="rounded-full bg-cyan-300 px-5 py-2 text-sm font-bold text-stone-950 transition hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-60">
+                  Generate Proof
+                </button>
+              </div>
+              <textarea
+                value={payload}
+                onChange={(event) => setPayload(event.target.value)}
+                className="mt-5 min-h-[32rem] w-full rounded-[1.5rem] border border-stone-800 bg-stone-950/80 p-4 font-mono text-xs leading-6 text-stone-200 outline-none ring-0"
+                spellCheck={false}
+              />
+            </article>
+
+            <aside className="grid gap-6">
+              <article className="rounded-[2rem] border border-stone-800 bg-stone-900/70 p-6">
+                <p className="text-xs font-semibold uppercase tracking-[0.25em] text-stone-500">Health</p>
+                <pre className="mt-4 overflow-auto rounded-[1.25rem] bg-stone-950/80 p-4 text-xs leading-6 text-stone-200">
+                  {JSON.stringify(health, null, 2)}
+                </pre>
+              </article>
+              <article className="rounded-[2rem] border border-stone-800 bg-stone-900/70 p-6">
+                <p className="text-xs font-semibold uppercase tracking-[0.25em] text-amber-300/80">Compliance Snapshot</p>
+                <pre className="mt-4 min-h-[12rem] overflow-auto rounded-[1.25rem] bg-stone-950/80 p-4 text-xs leading-6 text-stone-200">
+                  {complianceState || 'No compliance state loaded yet.'}
+                </pre>
+              </article>
+              <article className="rounded-[2rem] border border-stone-800 bg-stone-900/70 p-6">
+                <p className="text-xs font-semibold uppercase tracking-[0.25em] text-emerald-300/80">Response</p>
+                <pre className="mt-4 min-h-[12rem] overflow-auto rounded-[1.25rem] bg-stone-950/80 p-4 text-xs leading-6 text-stone-200">
+                  {response || 'No response yet.'}
+                </pre>
+              </article>
+            </aside>
+          </section>
+        )}
+
+        <article className="rounded-[2rem] border border-red-500/20 bg-red-950/20 p-6">
+          <p className="text-xs font-semibold uppercase tracking-[0.25em] text-red-300/80">Error</p>
+          <p className="mt-4 text-sm leading-6 text-red-200">{error || 'No errors.'}</p>
+        </article>
       </div>
     </div>
   )

@@ -16,7 +16,8 @@
     "groth16:build-verifier": "bash scripts/build-real-verifier.sh",
     "solana:deploy:devnet": "bash scripts/deploy-devnet.sh",
     "solana:init:protocol-config": "node scripts/init-protocol-config.mjs",
-    "stablehacks:smoke": "node scripts/institutional-mint-smoke.mjs"
+    "stablehacks:smoke": "node scripts/institutional-mint-smoke.mjs",
+    "demo:preflight": "bash scripts/demo-preflight.sh"
   },
   "dependencies": {
     "@aztec/bb.js": "0.87.9",

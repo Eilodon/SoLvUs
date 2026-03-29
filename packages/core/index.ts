@@ -7,3 +7,4 @@ export * from './orchestrator';
 export * from './config';
 export * from './prover/inputs';
 export * from './dev/fixture';
+export * from './compliance/travel_rule';

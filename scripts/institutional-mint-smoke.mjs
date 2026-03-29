@@ -13,6 +13,8 @@ const complianceApiKey = process.env.COMPLIANCE_API_KEY || "";
 const walletPath = process.env.SOLANA_WALLET || resolve(process.env.HOME || "", ".config/solana/id.json");
 const smokeAmount = Number.parseInt(process.env.STABLEHACKS_SMOKE_ZKUSD_AMOUNT || "1000000", 10);
 const permitTtlSeconds = Number.parseInt(process.env.STABLEHACKS_SMOKE_PERMIT_TTL || "900", 10);
+const phaseArg = process.argv.find((arg) => arg.startsWith("--phase="));
+const phase = phaseArg ? phaseArg.split("=")[1] : "full";
 
 if (!existsSync(walletPath)) {
   throw new Error(`missing wallet keypair: ${walletPath}`);
@@ -126,6 +128,16 @@ async function phaseOneComplianceControls() {
   console.log("[phase-1] revoked state:", JSON.stringify(revokedState, null, 2));
 }
 
+async function phaseProofWarmup() {
+  console.log("\n[proof-only] warm oracle");
+  const warmedOracle = await postJson("/compliance/warm-oracle", {});
+  console.log("[proof-only] oracle:", JSON.stringify(warmedOracle, null, 2));
+
+  console.log("\n[proof-only] warm proof cache");
+  const warmedProof = await postJson("/compliance/warm-proof", {});
+  console.log("[proof-only] proof:", JSON.stringify(warmedProof, null, 2));
+}
+
 async function phaseTwoLiveMint() {
   const operator = readKeypair(walletPath);
   const institutionName = `StableHacks Live Mint ${Date.now()}`;
@@ -164,6 +176,26 @@ async function phaseTwoLiveMint() {
 async function main() {
   const health = await getJson("/health");
   console.log("[health]", JSON.stringify(health, null, 2));
+
+  if (phase === "proof-only") {
+    await phaseProofWarmup();
+    console.log("\nproof warm-up complete");
+    return;
+  }
+
+  if (phase === "controls-only") {
+    await phaseOneComplianceControls();
+    console.log("\ncontrol-plane rehearsal complete");
+    return;
+  }
+
+  if (phase === "mint-only") {
+    await phaseTwoLiveMint();
+    console.log("\nlive mint rehearsal complete");
+    return;
+  }
+
+  await phaseProofWarmup();
   await phaseOneComplianceControls();
   await phaseTwoLiveMint();
   console.log("\nsmoke complete");
