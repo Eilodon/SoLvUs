@@ -19,7 +19,18 @@ import {
   validateFieldElementHex,
 } from '../shared/utils';
 
-export const GROTH16_PUBLIC_INPUT_FIELD_COUNT = 10;
+const CANONICAL_PUBLIC_INPUT_FIELD_NAMES = [
+  'solana_address',
+  'dlc_contract_id',
+  'relayer_pubkey_x',
+  'relayer_pubkey_y',
+  'collateral_profile',
+  'threshold',
+  'is_upper_bound',
+  'nullifier_hash',
+] as const;
+
+export const GROTH16_PUBLIC_INPUT_FIELD_COUNT = CANONICAL_PUBLIC_INPUT_FIELD_NAMES.length;
 export const GROTH16_PUBLIC_INPUT_FIELD_BYTES = 32;
 export const GROTH16_PUBLIC_INPUTS_TOTAL_BYTES =
   GROTH16_PUBLIC_INPUT_FIELD_COUNT * GROTH16_PUBLIC_INPUT_FIELD_BYTES;
@@ -107,6 +118,11 @@ export function collectPublicInputs(inputs: ProverInputs): Hex[] {
 
 export function serializePublicInputs(inputs: ProverInputs): Hex {
   const fields = collectPublicInputs(inputs);
+  if (fields.length !== GROTH16_PUBLIC_INPUT_FIELD_COUNT) {
+    throw new Error(
+      `Invalid canonical public_inputs field count: expected ${GROTH16_PUBLIC_INPUT_FIELD_COUNT}, got ${fields.length}`,
+    );
+  }
   const bytes = Buffer.concat(
     fields.map((field, index) => {
       validateBytesLength(field, GROTH16_PUBLIC_INPUT_FIELD_BYTES, `public_inputs[${index}]`);

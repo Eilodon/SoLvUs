@@ -19,6 +19,7 @@ const rootDir = resolve(new URL(".", import.meta.url).pathname, "..");
 dotenv.config({ path: resolve(rootDir, "config/devnet.env") });
 
 const dryRun = process.argv.includes("--dry-run");
+const CURRENT_PROTOCOL_CONFIG_DATA_LEN = 257;
 
 const walletPath = process.env.SOLANA_WALLET || resolve(process.env.HOME, ".config/solana/id.json");
 const connectionUrl = process.env.SOLANA_CLUSTER_URL || "https://api.devnet.solana.com";
@@ -89,7 +90,11 @@ function encodeU64LE(value) {
 async function main() {
   const connection = new Connection(connectionUrl, "confirmed");
   const accountInfo = await connection.getAccountInfo(protocolConfigPda);
-  const instructionName = accountInfo ? "update_protocol_config" : "initialize_protocol_config";
+  const instructionName = !accountInfo
+    ? "initialize_protocol_config"
+    : accountInfo.data.length === CURRENT_PROTOCOL_CONFIG_DATA_LEN
+      ? "update_protocol_config"
+      : "migrate_protocol_config";
   const nextProtocolAdmin = new PublicKey(process.env.NEXT_PROTOCOL_ADMIN_PUBKEY || payer.publicKey.toBase58());
   const keys = accountInfo
     ? [

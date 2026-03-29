@@ -97,7 +97,7 @@ export interface InstitutionAccountState {
   institution_pda: string;
   institution_id_hash: Hex;
   approved_operator: string;
-  status: 'active' | 'suspended' | 'uninitialized';
+  status: 'active' | 'suspended' | 'terminated' | 'uninitialized';
   risk_tier: number;
   daily_mint_cap: number;
   lifetime_mint_cap: number;
@@ -217,8 +217,14 @@ function encodeBool(value: boolean): Buffer {
   return Buffer.from([value ? 1 : 0]);
 }
 
-function encodeInstitutionStatus(status: 'active' | 'suspended'): Buffer {
-  return Buffer.from([status === 'active' ? 1 : 2]);
+function encodeInstitutionStatus(status: 'active' | 'suspended' | 'terminated'): Buffer {
+  if (status === 'active') {
+    return Buffer.from([1]);
+  }
+  if (status === 'suspended') {
+    return Buffer.from([2]);
+  }
+  return Buffer.from([3]);
 }
 
 function encodeHex32(value: Hex, label: string): Buffer {
@@ -273,7 +279,7 @@ function encodeIssueCompliancePermitInstruction(
 
 function encodeSetInstitutionStatusInstruction(
   institutionIdHash: Hex,
-  status: 'active' | 'suspended',
+  status: 'active' | 'suspended' | 'terminated',
 ): Buffer {
   return Buffer.concat([
     discriminator('set_institution_status'),
@@ -555,12 +561,15 @@ function readU16(data: Buffer, offset: number): { value: number; nextOffset: num
   };
 }
 
-function decodeInstitutionStatus(value: number): 'active' | 'suspended' | 'uninitialized' {
+function decodeInstitutionStatus(value: number): 'active' | 'suspended' | 'terminated' | 'uninitialized' {
   if (value === 1) {
     return 'active';
   }
   if (value === 2) {
     return 'suspended';
+  }
+  if (value === 3) {
+    return 'terminated';
   }
   return 'uninitialized';
 }
@@ -1291,7 +1300,7 @@ async function sendAdminInstruction(
 export async function setInstitutionStatusOnDevnet(
   config: SolvusConfig,
   institutionIdHash: Hex,
-  status: 'active' | 'suspended',
+  status: 'active' | 'suspended' | 'terminated',
 ): Promise<string> {
   return sendAdminInstruction(config, (programId, protocolConfigPda, payer) => {
     const [institutionPda] = PublicKey.findProgramAddressSync(

@@ -26,6 +26,8 @@ const INSTITUTION_MINT_WINDOW_SECONDS: i64 = 86400;
 const BPS_DENOMINATOR: u128 = 10_000;
 const COLLATERAL_RATIO_PRECISION: u128 = 100_000;
 const DEFAULT_COLLATERAL_RATIO_BPS: u64 = 15_000;
+const LIQUIDATION_THRESHOLD_BPS: u64 = 12_000;
+const AT_RISK_THRESHOLD_BPS: u64 = 13_000;
 // zkUSD uses 6 decimal places: 1_000_000 units = 1.000000 zkUSD.
 // This per-transaction ceiling therefore equals 1,000,000 zkUSD.
 const MAX_MINT_ZKUSD_AMOUNT: u64 = 1_000_000_000_000;
@@ -159,6 +161,10 @@ pub mod solvus {
                 || data_len == current_len,
             SolvusError::InvalidProtocolConfig
         );
+        require!(
+            data_len == current_len,
+            SolvusError::ProtocolConfigMigrationRequired
+        );
 
         let (current_protocol_admin, _current_compliance_admin, protocol_paused) =
             load_protocol_config_roles(protocol_config_info)?;
@@ -169,9 +175,6 @@ pub mod solvus {
         );
 
         let now = Clock::get()?.unix_timestamp;
-        if data_len != current_len {
-            protocol_config_info.resize(current_len)?;
-        }
         store_protocol_config(
             protocol_config_info,
             &ProtocolConfig {
@@ -188,6 +191,113 @@ pub mod solvus {
                 updated_at: now,
             },
         )?;
+
+        emit!(ProtocolConfigUpdatedEvent {
+            protocol_admin: next_protocol_admin,
+            compliance_admin,
+            groth16_verifier_program_id,
+            oracle_price_feed_id,
+            liquidation_program_id,
+            collateral_ratio_bps,
+            oracle_max_staleness_seconds,
+            protocol_paused,
+            updated_at: now,
+            authorized_relayer_pubkey_x,
+            authorized_relayer_pubkey_y,
+        });
+
+        Ok(())
+    }
+
+    pub fn migrate_protocol_config(
+        ctx: Context<MigrateProtocolConfig>,
+        next_protocol_admin: Pubkey,
+        compliance_admin: Pubkey,
+        groth16_verifier_program_id: Pubkey,
+        oracle_price_feed_id: Pubkey,
+        liquidation_program_id: Pubkey,
+        authorized_relayer_pubkey_x: [u8; 32],
+        authorized_relayer_pubkey_y: [u8; 32],
+        collateral_ratio_bps: u64,
+        oracle_max_staleness_seconds: u64,
+    ) -> Result<()> {
+        require!(
+            next_protocol_admin != Pubkey::default() && compliance_admin != Pubkey::default(),
+            SolvusError::Unauthorized
+        );
+        require!(
+            groth16_verifier_program_id != Pubkey::default(),
+            SolvusError::VerifierProgramNotConfigured
+        );
+        require!(
+            oracle_price_feed_id != Pubkey::default(),
+            SolvusError::OraclePriceFeedNotConfigured
+        );
+        require!(
+            collateral_ratio_bps >= DEFAULT_COLLATERAL_RATIO_BPS,
+            SolvusError::InvalidCollateralRatio
+        );
+        require!(
+            oracle_max_staleness_seconds >= DEFAULT_ORACLE_MAX_STALENESS_SECONDS,
+            SolvusError::InvalidOracleStaleness
+        );
+
+        let protocol_config_info = &ctx.accounts.protocol_config;
+        require_keys_eq!(
+            *protocol_config_info.owner,
+            crate::ID,
+            SolvusError::InvalidProtocolConfig
+        );
+        let legacy_len_v1 = 8 + LegacyProtocolConfigV1::LEN;
+        let legacy_len_v2 = 8 + LegacyProtocolConfigV2::LEN;
+        let legacy_len_v3 = 8 + LegacyProtocolConfigV3::LEN;
+        let current_len = 8 + ProtocolConfig::LEN;
+        let data_len = protocol_config_info.data_len();
+        require!(
+            data_len == legacy_len_v1
+                || data_len == legacy_len_v2
+                || data_len == legacy_len_v3
+                || data_len == current_len,
+            SolvusError::InvalidProtocolConfig
+        );
+        require!(
+            data_len != current_len,
+            SolvusError::ProtocolConfigAlreadyMigrated
+        );
+
+        let (current_protocol_admin, _legacy_compliance_admin, protocol_paused) =
+            load_protocol_config_roles(protocol_config_info)?;
+        require_keys_eq!(
+            current_protocol_admin,
+            ctx.accounts.protocol_admin.key(),
+            SolvusError::Unauthorized
+        );
+
+        let now = Clock::get()?.unix_timestamp;
+        protocol_config_info.resize(current_len)?;
+        store_protocol_config(
+            protocol_config_info,
+            &ProtocolConfig {
+                protocol_admin: next_protocol_admin,
+                compliance_admin,
+                groth16_verifier_program_id,
+                oracle_price_feed_id,
+                liquidation_program_id,
+                authorized_relayer_pubkey_x,
+                authorized_relayer_pubkey_y,
+                collateral_ratio_bps,
+                oracle_max_staleness_seconds,
+                protocol_paused,
+                updated_at: now,
+            },
+        )?;
+
+        emit!(ProtocolConfigMigratedEvent {
+            legacy_data_len: data_len as u32,
+            protocol_admin: next_protocol_admin,
+            compliance_admin,
+            updated_at: now,
+        });
 
         emit!(ProtocolConfigUpdatedEvent {
             protocol_admin: next_protocol_admin,
@@ -254,13 +364,19 @@ pub mod solvus {
 
         let now = Clock::get()?.unix_timestamp;
         let institution = &mut ctx.accounts.institution_account;
+        require!(
+            institution.status != InstitutionStatus::Terminated as u8,
+            SolvusError::InstitutionInTerminalState
+        );
         if institution.current_period_start == 0 {
             institution.current_period_start = now;
         }
 
         institution.institution_id_hash = institution_id_hash;
         institution.approved_operator = approved_operator;
-        institution.status = InstitutionStatus::Active as u8;
+        if institution.status == InstitutionStatus::Uninitialized as u8 {
+            institution.status = InstitutionStatus::Active as u8;
+        }
         institution.risk_tier = risk_tier;
         institution.daily_mint_cap = daily_mint_cap;
         institution.lifetime_mint_cap = lifetime_mint_cap;
@@ -359,12 +475,20 @@ pub mod solvus {
             SolvusError::InvalidInstitutionAccount
         );
         require!(
-            status == InstitutionStatus::Active as u8 || status == InstitutionStatus::Suspended as u8,
+            status == InstitutionStatus::Active as u8
+                || status == InstitutionStatus::Suspended as u8
+                || status == InstitutionStatus::Terminated as u8,
             SolvusError::InvalidInstitutionStatus
         );
 
-        let now = Clock::get()?.unix_timestamp;
         let institution = &mut ctx.accounts.institution_account;
+        require!(
+            institution.status != InstitutionStatus::Terminated as u8
+                || status == InstitutionStatus::Terminated as u8,
+            SolvusError::InstitutionInTerminalState
+        );
+
+        let now = Clock::get()?.unix_timestamp;
         institution.status = status;
         institution.updated_at = now;
 
@@ -404,12 +528,12 @@ pub mod solvus {
             SolvusError::InvalidCompliancePermit
         );
         require!(
-            permit.used_at <= 0,
+            permit.used_at == 0,
             SolvusError::CompliancePermitAlreadyUsed
         );
 
         let now = Clock::get()?.unix_timestamp;
-        permit.used_at = -now;
+        permit.used_at = -std::cmp::max(now, 1);
 
         emit!(CompliancePermitRevokedEvent {
             institution_id_hash,
@@ -787,6 +911,10 @@ pub mod solvus {
         );
         let now = Clock::get()?.unix_timestamp;
         let vault = &mut ctx.accounts.vault;
+        require!(
+            vault.status == VaultStatus::AtRisk as u8 || vault.status == VaultStatus::Unhealthy as u8,
+            SolvusError::VaultNotLiquidatable
+        );
         vault.status = VaultStatus::GracePeriod as u8;
         vault.grace_period_end = Some(now + GRACE_PERIOD_DURATION);
         vault.last_update = now;
@@ -823,18 +951,25 @@ pub mod solvus {
             btc_price,
             ctx.accounts.protocol_config.collateral_ratio_bps,
         )?;
+        let liquidation_collateral = scaled_collateral_threshold(
+            required_collateral,
+            LIQUIDATION_THRESHOLD_BPS,
+            ctx.accounts.protocol_config.collateral_ratio_bps,
+        )?;
+        let at_risk_collateral = scaled_collateral_threshold(
+            required_collateral,
+            AT_RISK_THRESHOLD_BPS,
+            ctx.accounts.protocol_config.collateral_ratio_bps,
+        )?;
 
         let now = Clock::get()?.unix_timestamp;
 
         // Update vault status based on collateral ratio
-        if vault.collateral_btc < required_collateral {
-            // Below 100% - Unhealthy
+        if vault.collateral_btc < liquidation_collateral {
             vault.status = VaultStatus::Unhealthy as u8;
-        } else if vault.collateral_btc < required_collateral * 12 / 10 {
-            // Between 100% and 120% - AtRisk
+        } else if vault.collateral_btc < at_risk_collateral || vault.collateral_btc < required_collateral {
             vault.status = VaultStatus::AtRisk as u8;
-        } else if vault.collateral_btc >= required_collateral * 15 / 10 {
-            // Above 150% - Healthy
+        } else {
             if vault.status != VaultStatus::Initialized as u8
                 && vault.status != VaultStatus::PendingBtcRelease as u8
                 && vault.status != VaultStatus::DlcTimeoutPending as u8
@@ -1297,7 +1432,16 @@ pub struct InitializeProtocolConfig<'info> {
 pub struct UpdateProtocolConfig<'info> {
     #[account(mut)]
     pub protocol_admin: Signer<'info>,
-    /// CHECK: Deserialized manually to support legacy ProtocolConfig migration.
+    /// CHECK: Deserialized manually to support current-format updates.
+    #[account(mut, seeds = [PROTOCOL_CONFIG_SEED], bump)]
+    pub protocol_config: UncheckedAccount<'info>,
+}
+
+#[derive(Accounts)]
+pub struct MigrateProtocolConfig<'info> {
+    #[account(mut)]
+    pub protocol_admin: Signer<'info>,
+    /// CHECK: Deserialized manually to migrate legacy ProtocolConfig layouts.
     #[account(mut, seeds = [PROTOCOL_CONFIG_SEED], bump)]
     pub protocol_config: UncheckedAccount<'info>,
 }
@@ -1657,6 +1801,7 @@ pub struct CompliancePermit {
     pub travel_rule_ref_hash: [u8; 32],
     pub issued_by: Pubkey,
     pub issued_at: i64,
+    // 0 = unused, positive = consumed at unix timestamp, negative = revoked at unix timestamp.
     pub used_at: i64,
 }
 
@@ -1718,6 +1863,7 @@ pub enum InstitutionStatus {
     Uninitialized = 0,
     Active = 1,
     Suspended = 2,
+    Terminated = 3,
 }
 
 #[event]
@@ -1818,6 +1964,14 @@ pub struct ProtocolConfigUpdatedEvent {
 pub struct ProtocolPauseChangedEvent {
     pub protocol_admin: Pubkey,
     pub paused: bool,
+    pub updated_at: i64,
+}
+
+#[event]
+pub struct ProtocolConfigMigratedEvent {
+    pub legacy_data_len: u32,
+    pub protocol_admin: Pubkey,
+    pub compliance_admin: Pubkey,
     pub updated_at: i64,
 }
 
@@ -1936,6 +2090,12 @@ pub enum SolvusError {
     InvalidOracleStaleness,
     #[msg("Protocol is paused")]
     ProtocolPaused,
+    #[msg("Legacy protocol config must use migrate_protocol_config")]
+    ProtocolConfigMigrationRequired,
+    #[msg("Protocol config is already in the current format")]
+    ProtocolConfigAlreadyMigrated,
+    #[msg("Institution is in a terminal state")]
+    InstitutionInTerminalState,
 }
 
 fn authorize_permissioned_mint(
@@ -2111,4 +2271,54 @@ fn required_collateral_from_price(
         .checked_div(denominator)
         .ok_or(SolvusError::MathOverflow)?;
     u64::try_from(value).map_err(|_| error!(SolvusError::MathOverflow))
+}
+
+fn scaled_collateral_threshold(
+    required_collateral: u64,
+    threshold_bps: u64,
+    collateral_ratio_bps: u64,
+) -> Result<u64> {
+    let value = (required_collateral as u128)
+        .checked_mul(threshold_bps as u128)
+        .ok_or(SolvusError::MathOverflow)?
+        .checked_div(collateral_ratio_bps as u128)
+        .ok_or(SolvusError::MathOverflow)?;
+    u64::try_from(value).map_err(|_| error!(SolvusError::MathOverflow))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scaled_collateral_threshold_uses_bps_relative_to_target_ratio() {
+        let required_collateral = 230_769u64;
+
+        let liquidation = scaled_collateral_threshold(
+            required_collateral,
+            LIQUIDATION_THRESHOLD_BPS,
+            DEFAULT_COLLATERAL_RATIO_BPS,
+        )
+        .expect("liquidation threshold");
+        let at_risk = scaled_collateral_threshold(
+            required_collateral,
+            AT_RISK_THRESHOLD_BPS,
+            DEFAULT_COLLATERAL_RATIO_BPS,
+        )
+        .expect("at-risk threshold");
+
+        assert_eq!(liquidation, 184_615);
+        assert_eq!(at_risk, 199_999);
+        assert!(liquidation < at_risk);
+        assert!(at_risk < required_collateral);
+    }
+
+    #[test]
+    fn revocation_timestamp_is_strictly_negative_even_at_epoch() {
+        let now = 0i64;
+        let revoked = -std::cmp::max(now, 1);
+
+        assert_eq!(revoked, -1);
+        assert!(revoked < 0);
+    }
 }
