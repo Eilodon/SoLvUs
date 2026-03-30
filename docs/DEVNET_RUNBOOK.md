@@ -96,7 +96,8 @@ The prover server endpoints are:
 
 For local bring-up:
 ```bash
-COMPLIANCE_API_KEY=solvus-devnet-compliance-key \
+export COMPLIANCE_API_KEY="$(openssl rand -hex 24)"
+
 PROVER_PORT=3901 \
 npm run server
 ```
@@ -105,14 +106,11 @@ If port `3001` is already occupied by another local project, point the frontend 
 
 ```bash
 VITE_PROVER_SERVER_URL=http://127.0.0.1:3901 \
-VITE_COMPLIANCE_API_KEY=solvus-devnet-compliance-key \
 npm run dev --workspace=@solvus/frontend
 
 PROVER_SERVER_URL=http://127.0.0.1:3901 \
-COMPLIANCE_API_KEY=solvus-devnet-compliance-key \
 npm run stablehacks:smoke
 
-COMPLIANCE_API_KEY=solvus-devnet-compliance-key \
 npm run demo:preflight
 ```
 
@@ -142,12 +140,10 @@ Run it with:
 ```bash
 # proof/oracle warm-up only
 PROVER_SERVER_URL=http://127.0.0.1:3901 \
-COMPLIANCE_API_KEY=solvus-devnet-compliance-key \
 npm run stablehacks:smoke -- --phase=proof-only
 
 # control-plane only
 PROVER_SERVER_URL=http://127.0.0.1:3901 \
-COMPLIANCE_API_KEY=solvus-devnet-compliance-key \
 npm run stablehacks:smoke -- --phase=controls-only
 
 # full rehearsal
@@ -158,7 +154,6 @@ PROVER_SERVER_URL=http://127.0.0.1:3901 npm run stablehacks:smoke
 Run this 10 minutes before any live recording or judge session:
 
 ```bash
-COMPLIANCE_API_KEY=solvus-devnet-compliance-key \
 PROVER_SERVER_URL=http://127.0.0.1:3901 \
 npm run demo:preflight
 ```
@@ -188,3 +183,8 @@ solana balance --keypair ~/.config/solana/id.json --url https://api.devnet.solan
 solana program show Cik3PiifeUrKrWcAFsHM5R7ckQVkWAc9M9THrXVfanVR --url https://api.devnet.solana.com
 solana program show EVA4sSUJ2V3cXkT9fHpSHWbVnxBfPuUQUtRChxwg36Cn --url https://api.devnet.solana.com
 ```
+
+## Secret Hygiene
+- Generate a fresh `COMPLIANCE_API_KEY` per operator session or per environment. Do not commit it to `config/*.env`, docs, or frontend `VITE_*` variables.
+- The public frontend should receive the compliance key only through an operator-controlled runtime session input, never through the build pipeline.
+- Railway production should use platform secrets for `COMPLIANCE_API_KEY`, `SOLANA_WALLET`, and proof artifacts.

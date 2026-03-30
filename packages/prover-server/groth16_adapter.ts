@@ -106,6 +106,7 @@ async function runCommand(
   cwd: string,
   extraEnv?: NodeJS.ProcessEnv,
 ): Promise<void> {
+  const startedAt = Date.now();
   try {
     await execFileAsync(command, args, {
       cwd,
@@ -115,6 +116,7 @@ async function runCommand(
       },
       maxBuffer: 64 * 1024 * 1024,
     });
+    console.log(`[proof] ${command} ${args.join(' ')} completed in ${Date.now() - startedAt}ms`);
   } catch (error: any) {
     const stdout = error?.stdout ? String(error.stdout) : '';
     const stderr = error?.stderr ? String(error.stderr) : '';
@@ -178,6 +180,7 @@ async function createProofJobDir(jobId: string): Promise<{
 }
 
 async function generateSunspotProofBundle(inputs: ProverInputs): Promise<Groth16ProofBundle> {
+  const startedAt = Date.now();
   await assertSunspotArtifacts();
 
   const nargoBin = resolveNargoBin();
@@ -226,6 +229,7 @@ async function generateSunspotProofBundle(inputs: ProverInputs): Promise<Groth16
     );
 
     adapterMode = 'sunspot';
+    console.log(`[proof] generateSunspotProofBundle total ${Date.now() - startedAt}ms`);
     return {
       proof: normalizeHex((await fs.readFile(proofPath)).toString('hex')),
       public_inputs: normalizeHex((await fs.readFile(publicWitnessPath)).toString('hex')),

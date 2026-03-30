@@ -26,8 +26,8 @@ COPY package.json package-lock.json* ./
 COPY packages/core/package.json packages/core/
 COPY packages/prover-server/package.json packages/prover-server/
 
-# Install dependencies
-RUN npm ci --workspace=@solvus/core --workspace=@solvus/prover-server
+# Copy pre-installed node_modules from deps stage
+COPY --from=deps /app/node_modules node_modules
 
 # Copy source code
 COPY packages/core/ packages/core/

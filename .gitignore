@@ -104,3 +104,4 @@ config/devnet-zkusd-mint-keypair.json
 *.tar.xz
 *.tar.gz
 *.zip
+.runtime-secrets/

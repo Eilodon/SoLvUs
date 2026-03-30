@@ -28,6 +28,8 @@
   ],
   "env": {
     "SOLVUS_ENV": "devnet",
-    "PROVER_PORT": "3001"
+    "PROVER_PORT": "3001",
+    "VITE_PROVER_SERVER_URL": "https://$vercel.url",
+    "VITE_DEMO_MODE": "false"
   }
 }

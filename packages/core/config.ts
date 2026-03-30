@@ -20,6 +20,11 @@ function readOptionalEnv(value?: string): string | undefined {
 }
 
 export function loadConfig(env = process.env): SolvusConfig {
+  const isRailwayRuntime = Boolean(env.RAILWAY_ENVIRONMENT || env.RAILWAY_PROJECT_ID);
+  const solanaWalletPath =
+    readOptionalEnv(env.SOLANA_WALLET) ||
+    (isRailwayRuntime ? undefined : `${process.env.HOME || ''}/.config/solana/id.json`);
+
   return {
     environment: readOptionalEnv(env.SOLVUS_ENV) || 'devnet',
     proverServerUrl: readOptionalEnv(env.PROVER_SERVER_URL) || 'http://localhost:3001',
@@ -29,8 +34,7 @@ export function loadConfig(env = process.env): SolvusConfig {
     oraclePriceFeedId: readOptionalEnv(env.ORACLE_PRICE_FEED_ID),
     zkusdMintAddress: readOptionalEnv(env.ZKUSD_MINT_ADDRESS),
     zkusdMintDecimals: Number.parseInt(readOptionalEnv(env.ZKUSD_MINT_DECIMALS) || '6', 10),
-    solanaWalletPath:
-      readOptionalEnv(env.SOLANA_WALLET) || `${process.env.HOME || ''}/.config/solana/id.json`,
+    solanaWalletPath: solanaWalletPath || '',
     relayerPrivateKey: readOptionalEnv(env.RELAYER_SECP256K1_PRIVATE_KEY) as Hex | undefined,
     proverBackend: 'groth16_adapter',
   };

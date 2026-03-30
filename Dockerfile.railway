@@ -1,109 +1,58 @@
-# Stage 1: Build frontend
-FROM node:20-alpine AS builder
+FROM node:20-bookworm-slim AS deps
 WORKDIR /app
 
-# Copy root config files
 COPY package.json package-lock.json* tsconfig.json ./
+COPY packages/core/package.json packages/core/package.json
+COPY packages/frontend/package.json packages/frontend/package.json
+COPY packages/prover-server/package.json packages/prover-server/package.json
 
-# Copy frontend package and config
-COPY packages/frontend/package.json packages/frontend/
-COPY packages/frontend/tsconfig.json packages/frontend/
-COPY packages/frontend/tsconfig.app.json packages/frontend/
-COPY packages/frontend/tsconfig.node.json packages/frontend/
-COPY packages/frontend/vite.config.ts packages/frontend/
-COPY packages/frontend/index.html packages/frontend/
-COPY packages/frontend/postcss.config.js packages/frontend/
-COPY packages/frontend/tailwind.config.js packages/frontend/
-COPY packages/frontend/eslint.config.js packages/frontend/
+RUN npm ci --include-workspace-root \
+    --workspace=@solvus/core \
+    --workspace=@solvus/frontend \
+    --workspace=@solvus/prover-server
 
-# Copy frontend source and public
-COPY packages/frontend/src packages/frontend/src
-COPY packages/frontend/public packages/frontend/public
-
-# Copy core package (frontend depends on it)
-COPY packages/core/package.json packages/core/
-COPY packages/core/tsconfig.json packages/core/
-COPY packages/core/index.ts packages/core/
-COPY packages/core/config.ts packages/core/
-COPY packages/core/contracts.ts packages/core/
-COPY packages/core/orchestrator.ts packages/core/
-COPY packages/core/ambient.d.ts packages/core/
-COPY packages/core/client packages/core/client
-COPY packages/core/compliance packages/core/compliance
-COPY packages/core/dev packages/core/dev
-COPY packages/core/identity packages/core/identity
-COPY packages/core/integrations packages/core/integrations
-COPY packages/core/prover packages/core/prover
-COPY packages/core/relayer packages/core/relayer
-COPY packages/core/shared packages/core/shared
-COPY packages/core/demo packages/core/demo
-
-# Install and build
-RUN npm ci --workspace=@solvus/frontend --workspace=@solvus/core && \
-    npm run build --workspace=@solvus/frontend
-
-# Stage 2: Runtime
-FROM node:20-alpine AS runtime
-RUN apk add --no-cache nginx
-
+FROM deps AS builder
 WORKDIR /app
 
-# Copy only runtime deps for prover-server
-COPY packages/prover-server/package.json packages/prover-server/
-COPY package.json package-lock.json* ./
-COPY packages/core/package.json packages/core/
-COPY packages/core/index.ts packages/core/
-COPY packages/core/config.ts packages/core/
-COPY packages/core/contracts.ts packages/core/
-COPY packages/core/orchestrator.ts packages/core/
-COPY packages/core/ambient.d.ts packages/core/
-COPY packages/core/client packages/core/client
-COPY packages/core/compliance packages/core/compliance
-COPY packages/core/dev packages/core/dev
-COPY packages/core/identity packages/core/identity
-COPY packages/core/integrations packages/core/integrations
-COPY packages/core/prover packages/core/prover
-COPY packages/core/relayer packages/core/relayer
-COPY packages/core/shared packages/core/shared
+COPY packages/core packages/core
+COPY packages/frontend packages/frontend
+COPY packages/prover-server packages/prover-server
+COPY config config
 
-RUN npm ci --omit=dev --workspace=@solvus/prover-server --workspace=@solvus/core
+RUN npm run build --workspace=@solvus/frontend
 
-# Copy built frontend
-COPY --from=builder /app/packages/frontend/dist /var/www/localhost
+FROM node:20-bookworm-slim AS runtime
+WORKDIR /app
 
-# Copy startup script and config
-COPY startup.sh /app/startup.sh
-RUN chmod +x /app/startup.sh
-COPY config/ config/
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends wget ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
-# Setup nginx
-RUN echo 'server { \
-    listen 80; \
-    server_name _; \
-    root /var/www/localhost; \
-    index index.html; \
-    location / { \
-        try_files $uri $uri/ /index.html; \
-    } \
-    location /api/ { \
-        proxy_pass http://localhost:3001/; \
-        proxy_http_version 1.1; \
-        proxy_set_header Upgrade $http_upgrade; \
-        proxy_set_header Connection "upgrade"; \
-        proxy_set_header Host $host; \
-    } \
-}' > /etc/nginx/http.d/default.conf
+COPY package.json package-lock.json* tsconfig.json ./
+COPY packages/core/package.json packages/core/package.json
+COPY packages/frontend/package.json packages/frontend/package.json
+COPY packages/prover-server/package.json packages/prover-server/package.json
 
-# Create user and set permissions
-RUN addgroup -g 1001 -S solvus && \
-    adduser -S solvus -u 1001 && \
-    chown -R solvus:solvus /app /var/www/localhost
+RUN npm ci --include=dev --include-workspace-root \
+    --workspace=@solvus/core \
+    --workspace=@solvus/prover-server
 
-USER solvus
+COPY packages/core packages/core
+COPY packages/prover-server packages/prover-server
+COPY circuits circuits
+COPY config config
+COPY scripts scripts
+COPY tools/railway-bin/nargo /usr/local/bin/nargo
+COPY tools/railway-bin/sunspot /usr/local/bin/sunspot
+COPY --from=builder /app/packages/frontend/dist packages/frontend/dist
 
-EXPOSE 80 3001
+ENV NODE_ENV=production
+ENV NARGO_BIN=/usr/local/bin/nargo
+ENV SUNSPOT_BIN=/usr/local/bin/sunspot
+
+EXPOSE 3001
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:3001/health || exit 1
+    CMD sh -c 'wget --no-verbose --tries=1 --spider "http://127.0.0.1:${PORT:-3001}/health" || exit 1'
 
-CMD ["/app/startup.sh"]
+CMD ["node", "scripts/railway-bootstrap.mjs"]

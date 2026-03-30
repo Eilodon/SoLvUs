@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "start": "TS_NODE_FILES=true ts-node prover_server.ts"
+    "start": "TS_NODE_FILES=true ts-node prover_server.ts",
+    "server": "npm run start"
   },
   "dependencies": {
     "ioredis": "^5.10.1"

@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Connection, PublicKey, Transaction } from '@solana/web3.js'
 
-const PROVER_SERVER_URL = import.meta.env.VITE_PROVER_SERVER_URL || 'http://localhost:3001'
-const COMPLIANCE_API_KEY = import.meta.env.VITE_COMPLIANCE_API_KEY || ''
+const PROVER_SERVER_URL =
+  import.meta.env.VITE_PROVER_SERVER_URL || (import.meta.env.DEV ? 'http://localhost:3001' : '')
 const DEFAULT_DEVNET_CLUSTER = 'https://api.devnet.solana.com'
 
 const SAMPLE_PROVER_INPUTS = {
@@ -25,11 +25,20 @@ const SAMPLE_PROVER_INPUTS = {
 interface HealthResponse {
   prover_backend?: string
   prover_adapter_mode?: string
+  artifact_demo_mode?: boolean
+  demo_artifact_path?: string | null
+  demo_context?: {
+    nullifier_hash?: string
+    owner_pubkey?: string
+    permission_profile?: {
+      institution_id_hash?: string
+    }
+  } | null
   solvus_program_id?: string
   devnet_mint?: {
     clusterUrl?: string
     feePayer?: string
-    walletPath?: string
+    wallet_configured?: boolean
     solvusProgramId?: string
     groth16VerifierProgramId?: string
     zkusdMintAddress?: string
@@ -45,6 +54,7 @@ interface ComplianceContext {
 }
 
 type DeskView = 'compliance' | 'operator' | 'advanced'
+type ActionKind = 'idle' | 'success' | 'error' | 'loading'
 
 interface InstitutionSnapshot {
   institution_pda: string
@@ -114,6 +124,8 @@ interface PreparedMintResponse {
   permission_profile?: {
     institution_id_hash?: string
   }
+  oracle_live_price_e8?: number
+  oracle_min_price_e8?: number
   [key: string]: unknown
 }
 
@@ -142,23 +154,23 @@ function decodeBase64(base64: string): Uint8Array {
   return Uint8Array.from(atob(base64), (char) => char.charCodeAt(0))
 }
 
-function buildApiHeaders(includeApiKey = false): HeadersInit {
+function buildApiHeaders(apiKey: string, includeApiKey = false): HeadersInit {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   }
-  if (includeApiKey && COMPLIANCE_API_KEY) {
-    headers['x-api-key'] = COMPLIANCE_API_KEY
+  if (includeApiKey && apiKey) {
+    headers['x-api-key'] = apiKey
   }
   return headers
 }
 
-function buildRequestHeaders(includeApiKey = false, includeJson = true): HeadersInit {
+function buildRequestHeaders(apiKey: string, includeApiKey = false, includeJson = true): HeadersInit {
   const headers: Record<string, string> = {}
   if (includeJson) {
     headers['Content-Type'] = 'application/json'
   }
-  if (includeApiKey && COMPLIANCE_API_KEY) {
-    headers['x-api-key'] = COMPLIANCE_API_KEY
+  if (includeApiKey && apiKey) {
+    headers['x-api-key'] = apiKey
   }
   return headers
 }
@@ -246,16 +258,21 @@ function App() {
   const [status, setStatus] = useState<'idle' | 'loading' | 'error' | 'done'>('idle')
   const [response, setResponse] = useState('')
   const [error, setError] = useState('')
+  const [lastActionMessage, setLastActionMessage] = useState('')
+  const [lastActionKind, setLastActionKind] = useState<ActionKind>('idle')
+  const [complianceApiKey, setComplianceApiKey] = useState('')
   const [walletAddress, setWalletAddress] = useState('')
   const [activeView, setActiveView] = useState<DeskView>('compliance')
   const [complianceContext, setComplianceContext] = useState<ComplianceContext | null>(null)
   const [complianceState, setComplianceState] = useState('')
   const [auditTrail, setAuditTrail] = useState<AuditTrailRecord[]>([])
+  const [oracleSnapshot, setOracleSnapshot] = useState<{ live?: number; floor?: number }>({})
   const complianceSnapshot = parseJsonObject<ComplianceSnapshot>(complianceState)
   const responseSnapshot = parseJsonObject<Record<string, unknown>>(response)
   const institution = complianceSnapshot?.institution ?? null
   const permit = complianceSnapshot?.permit ?? null
   const holder = complianceSnapshot?.holder ?? null
+  const artifactDemoMode = health?.artifact_demo_mode === true
 
   const refreshHealth = async () => {
     const res = await fetch(`${PROVER_SERVER_URL}/health`)
@@ -269,6 +286,48 @@ function App() {
   useEffect(() => {
     refreshHealth().catch((err) => setError(err.message))
   }, [])
+
+  useEffect(() => {
+    if (status === 'loading') {
+      setLastActionKind('loading')
+      setLastActionMessage('Request in progress...')
+      return
+    }
+    if (status === 'error' && error) {
+      setLastActionKind('error')
+      setLastActionMessage(error)
+      return
+    }
+    if (status === 'done' && response) {
+      setLastActionKind('success')
+      setLastActionMessage('Action completed successfully.')
+    }
+  }, [status, error, response])
+
+  useEffect(() => {
+    const institutionIdHash = health?.demo_context?.permission_profile?.institution_id_hash
+    const nullifierHash = health?.demo_context?.nullifier_hash
+    if (!artifactDemoMode || typeof institutionIdHash !== 'string' || typeof nullifierHash !== 'string') {
+      return
+    }
+
+    const nextContext = { institutionIdHash, nullifierHash }
+    if (
+      complianceContext?.institutionIdHash === nextContext.institutionIdHash &&
+      complianceContext?.nullifierHash === nextContext.nullifierHash
+    ) {
+      return
+    }
+
+    setComplianceContext(nextContext)
+    syncComplianceState(nextContext)
+      .then(async () => {
+        if (complianceApiKey) {
+          await syncAuditTrail(nextContext)
+        }
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : 'Failed to bootstrap demo context'))
+  }, [artifactDemoMode, health, complianceApiKey])
 
   const buildPermissionedRequestPayload = () => ({
     institution_name: institutionName,
@@ -298,7 +357,7 @@ function App() {
       institution_id_hash: context.institutionIdHash,
     })
     const res = await fetch(`${PROVER_SERVER_URL}/compliance/audit-trail?${params.toString()}`, {
-      headers: buildRequestHeaders(true, false),
+      headers: buildRequestHeaders(complianceApiKey, true, false),
     })
     const body = (await res.json()) as AuditTrailResponse & { message?: string; error?: string }
     if (!res.ok) {
@@ -335,6 +394,12 @@ function App() {
   const captureComplianceContext = async (body: PreparedMintResponse, fallbackNullifierHash?: string) => {
     const institutionIdHash = body.permission_profile?.institution_id_hash
     const nullifierHash = body.nullifier_hash || fallbackNullifierHash
+    if (typeof body.oracle_live_price_e8 === 'number' || typeof body.oracle_min_price_e8 === 'number') {
+      setOracleSnapshot({
+        live: typeof body.oracle_live_price_e8 === 'number' ? body.oracle_live_price_e8 : oracleSnapshot.live,
+        floor: typeof body.oracle_min_price_e8 === 'number' ? body.oracle_min_price_e8 : oracleSnapshot.floor,
+      })
+    }
     if (typeof institutionIdHash === 'string' && typeof nullifierHash === 'string') {
       const context = { institutionIdHash, nullifierHash }
       setComplianceContext(context)
@@ -349,7 +414,7 @@ function App() {
 
     const res = await fetch(`${PROVER_SERVER_URL}${path}`, {
       method: 'POST',
-      headers: buildApiHeaders(true),
+      headers: buildApiHeaders(complianceApiKey, true),
       body: JSON.stringify(payload),
     })
     const body = await res.json()
@@ -366,8 +431,10 @@ function App() {
     setResponse('')
 
     try {
-      const parsed = JSON.parse(payload)
-      const idempotencyKey = await sha256Hex(JSON.stringify(parsed.prover_inputs))
+      const parsed = artifactDemoMode ? {} : JSON.parse(payload)
+      const idempotencyKey = artifactDemoMode
+        ? 'artifact-demo-proof'
+        : await sha256Hex(JSON.stringify(parsed.prover_inputs))
       const res = await fetch(`${PROVER_SERVER_URL}/prove`, {
         method: 'POST',
         headers: {
@@ -383,6 +450,8 @@ function App() {
       }
 
       setResponse(JSON.stringify(body, null, 2))
+      setLastActionMessage('Proof response loaded.')
+      await captureComplianceContext(health?.demo_context ?? {}, body.nullifier_hash)
       setStatus('done')
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error'
@@ -397,12 +466,12 @@ function App() {
     setResponse('')
 
     try {
-      const parsed = JSON.parse(payload)
+      const parsed = artifactDemoMode ? null : JSON.parse(payload)
       const res = await fetch(`${PROVER_SERVER_URL}/mint-devnet`, {
         method: 'POST',
-        headers: buildApiHeaders(true),
+        headers: buildApiHeaders(complianceApiKey, true),
         body: JSON.stringify({
-          prover_inputs: parsed.prover_inputs,
+          ...(artifactDemoMode ? {} : { prover_inputs: parsed.prover_inputs }),
           zkusd_amount: Number(zkusdAmount),
           ...buildPermissionedRequestPayload(),
         }),
@@ -413,8 +482,9 @@ function App() {
         throw new Error(body.message || body.error || 'Devnet mint failed')
       }
 
-      await captureComplianceContext(body, parsed.prover_inputs?.nullifier_hash)
+      await captureComplianceContext(body, parsed?.prover_inputs?.nullifier_hash)
       setResponse(JSON.stringify(body, null, 2))
+      setLastActionMessage('Demo mint request completed.')
       setStatus('done')
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error'
@@ -429,6 +499,9 @@ function App() {
     setResponse('')
 
     try {
+      if (artifactDemoMode) {
+        throw new Error('Browser-wallet mint is disabled while Railway is running in artifact demo mode')
+      }
       const provider = await connectPhantom()
       const ownerPubkey = provider.publicKey?.toBase58()
       if (!ownerPubkey) {
@@ -437,7 +510,7 @@ function App() {
 
       const prepareRes = await fetch(`${PROVER_SERVER_URL}/prepare-devnet-mint`, {
         method: 'POST',
-        headers: buildApiHeaders(true),
+        headers: buildApiHeaders(complianceApiKey, true),
         body: JSON.stringify({
           owner_pubkey: ownerPubkey,
           zkusd_amount: Number(zkusdAmount),
@@ -474,7 +547,7 @@ function App() {
       if (prepared.permission_profile?.institution_id_hash && prepared.nullifier_hash) {
         const recordRes = await fetch(`${PROVER_SERVER_URL}/compliance/record-mint-submission`, {
           method: 'POST',
-          headers: buildRequestHeaders(true),
+          headers: buildRequestHeaders(complianceApiKey, true),
           body: JSON.stringify({
             institution_id_hash: prepared.permission_profile.institution_id_hash,
             nullifier_hash: prepared.nullifier_hash,
@@ -674,14 +747,19 @@ function App() {
     try {
       const res = await fetch(`${PROVER_SERVER_URL}/compliance/warm-oracle`, {
         method: 'POST',
-        headers: buildRequestHeaders(true),
+        headers: buildRequestHeaders(complianceApiKey, true),
         body: JSON.stringify({}),
       })
       const body = await res.json()
       if (!res.ok) {
         throw new Error(body.message || body.error || 'Oracle warm-up failed')
       }
+      setOracleSnapshot({
+        live: typeof body.live_price_e8 === 'number' ? body.live_price_e8 : oracleSnapshot.live,
+        floor: typeof body.live_price_e8 === 'number' ? body.live_price_e8 : oracleSnapshot.floor,
+      })
       setResponse(JSON.stringify(body, null, 2))
+      setLastActionMessage('Oracle warm-up succeeded.')
       setStatus('done')
       await refreshHealth()
     } catch (err) {
@@ -697,7 +775,7 @@ function App() {
     try {
       const res = await fetch(`${PROVER_SERVER_URL}/compliance/warm-proof`, {
         method: 'POST',
-        headers: buildRequestHeaders(true),
+        headers: buildRequestHeaders(complianceApiKey, true),
         body: JSON.stringify({}),
       })
       const body = await res.json()
@@ -705,6 +783,8 @@ function App() {
         throw new Error(body.message || body.error || 'Proof warm-up failed')
       }
       setResponse(JSON.stringify(body, null, 2))
+      setLastActionMessage('Proof warm-up succeeded.')
+      await captureComplianceContext(health?.demo_context ?? {}, body.nullifier_hash)
       setStatus('done')
       await refreshHealth()
     } catch (err) {
@@ -726,7 +806,7 @@ function App() {
         format: 'csv',
       })
       const res = await fetch(`${PROVER_SERVER_URL}/compliance/audit-trail?${params.toString()}`, {
-        headers: buildRequestHeaders(true, false),
+        headers: buildRequestHeaders(complianceApiKey, true, false),
       })
       if (!res.ok) {
         const body = await res.json()
@@ -749,9 +829,13 @@ function App() {
   }
 
   const oracleLivePriceE8 =
-    typeof responseSnapshot?.oracle_live_price_e8 === 'number' ? responseSnapshot.oracle_live_price_e8 : undefined
+    typeof responseSnapshot?.oracle_live_price_e8 === 'number'
+      ? responseSnapshot.oracle_live_price_e8
+      : oracleSnapshot.live
   const oracleMinPriceE8 =
-    typeof responseSnapshot?.oracle_min_price_e8 === 'number' ? responseSnapshot.oracle_min_price_e8 : undefined
+    typeof responseSnapshot?.oracle_min_price_e8 === 'number'
+      ? responseSnapshot.oracle_min_price_e8
+      : oracleSnapshot.floor
   const latestMintSignature =
     typeof responseSnapshot?.submitted_signature === 'string'
       ? responseSnapshot.submitted_signature
@@ -811,6 +895,43 @@ function App() {
             </button>
           ))}
         </nav>
+
+        <section className="rounded-[1.5rem] border border-stone-800 bg-stone-900/70 p-5">
+          <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Protected Endpoint Access</p>
+              <p className="mt-2 text-sm text-stone-400">
+                Compliance and devnet mint requests use a session-scoped API key entered here. The key is not embedded into the frontend build.
+              </p>
+            </div>
+            <label className="flex min-w-[20rem] flex-col gap-2 text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">
+              Session API Key
+              <input
+                type="password"
+                value={complianceApiKey}
+                onChange={(event) => setComplianceApiKey(event.target.value)}
+                placeholder="Paste COMPLIANCE_API_KEY for this session"
+                autoComplete="off"
+                spellCheck={false}
+                className="rounded-2xl border border-stone-700 bg-stone-950 px-4 py-3 text-sm font-normal normal-case tracking-normal text-stone-100 outline-none transition focus:border-amber-300/50"
+              />
+            </label>
+          </div>
+        </section>
+
+        <section
+          className={`rounded-[1.25rem] border px-5 py-4 text-sm ${
+            lastActionKind === 'success'
+              ? 'border-emerald-400/30 bg-emerald-300/10 text-emerald-100'
+              : lastActionKind === 'error'
+                ? 'border-red-400/30 bg-red-300/10 text-red-100'
+                : lastActionKind === 'loading'
+                  ? 'border-amber-400/30 bg-amber-300/10 text-amber-100'
+                  : 'border-stone-800 bg-stone-900/60 text-stone-400'
+          }`}
+        >
+          {lastActionMessage || 'Ready.'}
+        </section>
 
         <section className="grid gap-4 md:grid-cols-4">
           <article className="rounded-[1.5rem] border border-stone-800 bg-stone-900/70 p-5">
@@ -1103,11 +1224,16 @@ function App() {
               </div>
 
               <div className="mt-6 flex flex-wrap gap-3">
-                <button onClick={mintOnDevnet} disabled={status === 'loading'} className="rounded-full bg-emerald-300 px-5 py-2 text-sm font-bold text-stone-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-60">CLI Mint On Devnet</button>
-                <button onClick={mintWithPhantom} disabled={status === 'loading'} className="rounded-full bg-fuchsia-300 px-5 py-2 text-sm font-bold text-stone-950 transition hover:bg-fuchsia-200 disabled:cursor-not-allowed disabled:opacity-60">Mint With Browser Wallet</button>
+                <button onClick={mintOnDevnet} disabled={status === 'loading'} className="rounded-full bg-emerald-300 px-5 py-2 text-sm font-bold text-stone-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-60">{artifactDemoMode ? 'Run Demo Mint' : 'CLI Mint On Devnet'}</button>
+                <button onClick={mintWithPhantom} disabled={status === 'loading' || artifactDemoMode} className="rounded-full bg-fuchsia-300 px-5 py-2 text-sm font-bold text-stone-950 transition hover:bg-fuchsia-200 disabled:cursor-not-allowed disabled:opacity-60">Mint With Browser Wallet</button>
                 <button onClick={warmOracle} disabled={status === 'loading'} className="rounded-full border border-stone-700 bg-stone-900 px-5 py-2 text-sm font-bold text-stone-200 transition hover:border-amber-300/40 disabled:cursor-not-allowed disabled:opacity-60">Warm Oracle</button>
                 <button onClick={warmProofCache} disabled={status === 'loading'} className="rounded-full border border-stone-700 bg-stone-900 px-5 py-2 text-sm font-bold text-stone-200 transition hover:border-amber-300/40 disabled:cursor-not-allowed disabled:opacity-60">Warm Proof</button>
               </div>
+              {artifactDemoMode && (
+                <p className="mt-4 text-sm leading-6 text-amber-200">
+                  Demo mode is pinned to a precomputed Groth16 artifact on Railway. Browser-wallet mint is disabled so the public demo stays stable.
+                </p>
+              )}
             </article>
 
             <aside className="grid gap-6">
@@ -1149,15 +1275,21 @@ function App() {
                   <h2 className="mt-2 text-2xl font-bold text-stone-50">Raw Payload + Debug Surface</h2>
                 </div>
                 <button onClick={submitProof} disabled={status === 'loading'} className="rounded-full bg-cyan-300 px-5 py-2 text-sm font-bold text-stone-950 transition hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-60">
-                  Generate Proof
+                  {artifactDemoMode ? 'Fetch Demo Proof' : 'Generate Proof'}
                 </button>
               </div>
               <textarea
                 value={payload}
                 onChange={(event) => setPayload(event.target.value)}
+                disabled={artifactDemoMode}
                 className="mt-5 min-h-[32rem] w-full rounded-[1.5rem] border border-stone-800 bg-stone-950/80 p-4 font-mono text-xs leading-6 text-stone-200 outline-none ring-0"
                 spellCheck={false}
               />
+              {artifactDemoMode && (
+                <p className="mt-4 text-sm leading-6 text-amber-200">
+                  Advanced proof input is locked in artifact demo mode. The server returns the pinned demo proof bundle to avoid prover-input drift.
+                </p>
+              )}
             </article>
 
             <aside className="grid gap-6">

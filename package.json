@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "npm run dev --workspace=@solvus/frontend",
     "server": "TS_NODE_FILES=true ts-node packages/prover-server/prover_server.ts",
+    "demo:artifact": "TS_NODE_FILES=true ts-node scripts/generate-demo-proof-artifact.ts",
     "sample:prover-inputs": "TS_NODE_FILES=true ts-node generate_prover_toml.ts",
     "sample:verifier-manifest": "TS_NODE_FILES=true ts-node generate_verifier_manifest.ts",
     "sample:relayer": "TS_NODE_FILES=true ts-node verify_relayer.ts",

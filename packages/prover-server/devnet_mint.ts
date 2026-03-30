@@ -195,6 +195,10 @@ interface OracleRefreshWindow {
   livePrice1e8: number | null;
 }
 
+function logTiming(scope: string, step: string, startedAt: number): void {
+  console.log(`[${scope}] ${step} in ${Date.now() - startedAt}ms`);
+}
+
 interface PermissionedMintAccounts {
   institutionPda: PublicKey;
   compliancePermitPda: PublicKey;
@@ -542,10 +546,11 @@ async function uploadVerificationPayload(
   programId: PublicKey,
   verificationPayloadPda: PublicKey,
   mintInput: MintZkUSDInput,
-): Promise<void> {
+): Promise<boolean> {
   const existing = await connection.getAccountInfo(verificationPayloadPda);
   if (existing) {
-    throw new Error(`Verification payload PDA already exists: ${verificationPayloadPda.toBase58()}`);
+    console.warn(`[mint] Reusing existing verification payload PDA ${verificationPayloadPda.toBase58()}`);
+    return false;
   }
 
   const proofBytes = Buffer.from(hexToBytes(mintInput.proof));
@@ -597,6 +602,8 @@ async function uploadVerificationPayload(
     );
     await sendAndConfirmTransaction(connection, tx, [payer], { commitment: 'confirmed' });
   }
+
+  return true;
 }
 
 function getPermissionedMintAccounts(
@@ -856,6 +863,7 @@ function buildAnchorWallet(payer: Keypair): {
 }
 
 async function fetchLatestHermesPriceFeed(feedId: string): Promise<HermesLatestPriceFeed> {
+  const startedAt = Date.now();
   const url = new URL(PYTH_HERMES_LATEST_FEED_URL);
   url.searchParams.set('binary', 'true');
   url.searchParams.append('ids[]', feedId);
@@ -871,6 +879,7 @@ async function fetchLatestHermesPriceFeed(feedId: string): Promise<HermesLatestP
     throw new Error(`Hermes response missing VAA for feed ${feedId}`);
   }
 
+  logTiming('oracle', 'fetchLatestHermesPriceFeed', startedAt);
   return latestFeed;
 }
 
@@ -939,6 +948,7 @@ async function sendSingleInstructionTransaction(
   instructionWithSigners: InstructionWithEphemeralSigners,
   computeUnitLimit: number,
 ): Promise<string> {
+  const startedAt = Date.now();
   const tx = new Transaction().add(
     ComputeBudgetProgram.setComputeUnitPrice({
       microLamports: PYTH_UPDATE_COMPUTE_UNIT_PRICE_MICROLAMPORTS,
@@ -949,15 +959,22 @@ async function sendSingleInstructionTransaction(
     instructionWithSigners.instruction,
   );
 
-  return sendAndConfirmTransaction(connection, tx, [payer, ...instructionWithSigners.signers], {
+  const signature = await sendAndConfirmTransaction(connection, tx, [payer, ...instructionWithSigners.signers], {
     commitment: 'confirmed',
   });
+  logTiming(
+    'oracle',
+    `sendSingleInstructionTransaction(signers=${instructionWithSigners.signers.length}, cu=${computeUnitLimit})`,
+    startedAt,
+  );
+  return signature;
 }
 
 async function postFreshOraclePriceUpdate(
   connection: Connection,
   payer: Keypair,
 ): Promise<OracleRefreshWindow> {
+  const startedAt = Date.now();
   const latestFeed = await fetchLatestHermesPriceFeed(PYTH_BTC_USD_FEED_ID);
   const latestVaa = latestFeed.vaa;
   if (!latestVaa) {
@@ -1005,6 +1022,7 @@ async function postFreshOraclePriceUpdate(
     wormhole,
     accumulatorUpdateData.vaa,
   );
+  logTiming('oracle', 'buildPostEncodedVaaInstructions', startedAt);
 
   for (const instructionWithSigners of postInstructions) {
     const isCreateInstruction = instructionWithSigners.signers.length > 0;
@@ -1053,6 +1071,8 @@ async function postFreshOraclePriceUpdate(
       PYTH_UPDATE_COMPUTE_UNIT_LIMIT,
     );
   }
+
+  logTiming('oracle', 'postFreshOraclePriceUpdate(total)', startedAt);
 
   return {
     publishTime,

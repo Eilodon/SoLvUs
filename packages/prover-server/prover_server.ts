@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import { promises as fs } from 'fs';
+import { existsSync, promises as fs } from 'fs';
 import bodyParser from 'body-parser';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -9,10 +9,14 @@ import { PublicKey } from '@solana/web3.js';
 import Redis from 'ioredis';
 
 const workspaceRoot = path.join(__dirname, '../..');
+const frontendDistPath = path.join(workspaceRoot, 'packages/frontend/dist');
 const solvusEnv = process.env.SOLVUS_ENV || 'devnet';
-dotenv.config({
-  path: [path.join(workspaceRoot, `config/${solvusEnv}.env`), path.join(workspaceRoot, '.env')],
-});
+const isRailwayRuntime = Boolean(process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID);
+if (!isRailwayRuntime) {
+  dotenv.config({
+    path: [path.join(workspaceRoot, `config/${solvusEnv}.env`), path.join(workspaceRoot, '.env')],
+  });
+}
 
 import {
   Hex,
@@ -20,6 +24,7 @@ import {
   TravelRuleRecord,
   buildTravelRuleLegalPerson,
   bytesToHex,
+  createDevMintFixture,
   createDynamicDevMintFixture,
   DEV_SOLANA_ADDRESS,
   deriveTravelRuleDecisionRefHash,
@@ -52,7 +57,7 @@ import {
 
 const app = express();
 const config = loadConfig();
-const PORT = process.env.PROVER_PORT || 3001;
+const PORT = process.env.PORT || process.env.PROVER_PORT || 3001;
 const CACHE_TTL_SECONDS = Math.floor(RELAYER_SIG_EXPIRY / 1000);
 const DEFAULT_L1_REFUND_TIMELOCK_SECONDS = 7 * 24 * 60 * 60;
 const DEFAULT_PERMISSIONED_MINT_TTL_SECONDS = 15 * 60;
@@ -60,6 +65,20 @@ const DEFAULT_INSTITUTION_LABEL = 'StableHacks Demo Treasury';
 const COMPLIANCE_API_KEY = process.env.COMPLIANCE_API_KEY || '';
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const AUDIT_JOURNAL_PATH = path.join(workspaceRoot, 'config/compliance-audit-journal.jsonl');
+const CONFIGURED_GROTH16_ARTIFACT_PATH = process.env.SOLVUS_GROTH16_PROOF_PATH?.trim() || '';
+
+interface DemoProofArtifact {
+  prover_inputs?: ProverInputs;
+  metadata?: {
+    demo_owner_pubkey?: string;
+  };
+}
+
+interface DemoContextPayload {
+  nullifier_hash: Hex;
+  permission_profile: InstitutionPermissionProfile;
+  owner_pubkey?: string;
+}
 
 app.use(cors());
 app.use(bodyParser.json({ limit: '1mb' }));
@@ -218,6 +237,74 @@ function buildCache(): CacheBackend {
 
 const cache = buildCache();
 
+function resolveConfiguredArtifactPath(): string | null {
+  if (!CONFIGURED_GROTH16_ARTIFACT_PATH) {
+    return null;
+  }
+  return path.isAbsolute(CONFIGURED_GROTH16_ARTIFACT_PATH)
+    ? CONFIGURED_GROTH16_ARTIFACT_PATH
+    : path.resolve(workspaceRoot, CONFIGURED_GROTH16_ARTIFACT_PATH);
+}
+
+async function loadConfiguredDemoProofArtifact(): Promise<DemoProofArtifact | null> {
+  const artifactPath = resolveConfiguredArtifactPath();
+  if (!artifactPath) {
+    return null;
+  }
+
+  try {
+    const raw = await fs.readFile(artifactPath, 'utf8');
+    return JSON.parse(raw) as DemoProofArtifact;
+  } catch (error) {
+    console.warn('[demo] Failed to load configured Groth16 proof artifact metadata');
+    return null;
+  }
+}
+
+async function resolveDemoMintProverInputs(
+  requestedProverInputs: ProverInputs | undefined,
+): Promise<ProverInputs> {
+  if (requestedProverInputs) {
+    return requestedProverInputs;
+  }
+
+  const artifact = await loadConfiguredDemoProofArtifact();
+  if (artifact?.prover_inputs) {
+    return artifact.prover_inputs;
+  }
+
+  const fixture = await createDevMintFixture();
+  return fixture.prover_inputs;
+}
+
+function buildDefaultDemoRequest(zkusdAmount = 1_000_000): Record<string, unknown> {
+  return {
+    institution_name: 'StableHacks Demo Treasury',
+    kyb_reference: 'KYB-APPROVED-DEMO',
+    travel_rule_reference: 'TRAVEL-RULE-DEMO',
+    kyt_score: 24,
+    permit_ttl_seconds: 900,
+    daily_mint_cap: Math.max(zkusdAmount * 10, 10_000_000),
+    lifetime_mint_cap: Math.max(zkusdAmount * 100, 100_000_000),
+    travel_rule_required: true,
+  };
+}
+
+async function buildDemoContextPayload(zkusdAmount = 1_000_000): Promise<DemoContextPayload | null> {
+  const artifactPath = resolveConfiguredArtifactPath();
+  if (!artifactPath) {
+    return null;
+  }
+
+  const proverInputs = await resolveDemoMintProverInputs(undefined);
+  const artifact = await loadConfiguredDemoProofArtifact();
+  return {
+    nullifier_hash: proverInputs.nullifier_hash,
+    permission_profile: resolvePermissionProfile(buildDefaultDemoRequest(zkusdAmount), 'server-admin', zkusdAmount),
+    owner_pubkey: artifact?.metadata?.demo_owner_pubkey,
+  };
+}
+
 function requireApiKey(req: express.Request, res: express.Response, next: express.NextFunction): void {
   if (!COMPLIANCE_API_KEY) {
     res.status(503).json({
@@ -324,32 +411,21 @@ function buildTravelRuleRecord(
 // Prevents JSONL corruption from concurrent writes in single-instance devnet.
 // For production multi-instance, use SQLite WAL or external message queue.
 let auditJournalMutex: Promise<void> = Promise.resolve();
-let auditJournalMutexResolve: (() => void) | null = null;
 
-function acquireAuditJournalLock(): Promise<void> {
-  return new Promise((resolve) => {
-    const previousResolve = auditJournalMutexResolve;
-    auditJournalMutex = auditJournalMutex.then(async () => {
-      if (previousResolve) previousResolve();
-      await new Promise<void>((r) => {
-        auditJournalMutexResolve = r;
-      });
-      resolve();
-    });
+async function acquireAuditJournalLock(): Promise<() => void> {
+  const previous = auditJournalMutex;
+  let release!: () => void;
+  auditJournalMutex = new Promise<void>((resolve) => {
+    release = resolve;
   });
-}
-
-function releaseAuditJournalLock(): void {
-  if (auditJournalMutexResolve) {
-    auditJournalMutexResolve();
-    auditJournalMutexResolve = null;
-  }
+  await previous;
+  return release;
 }
 
 async function appendAuditRecord(
   record: Omit<ComplianceAuditRecord, 'record_id' | 'recorded_at' | 'recorded_unix'>,
 ): Promise<ComplianceAuditRecord> {
-  await acquireAuditJournalLock();
+  const releaseAuditJournalLock = await acquireAuditJournalLock();
   try {
     const recordedUnix = Math.floor(Date.now() / 1000);
     const persisted: ComplianceAuditRecord = {
@@ -587,18 +663,48 @@ function resolvePermissionProfile(
 }
 
 app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    timestamp: Math.floor(Date.now() / 1000),
-    prover_backend: config.proverBackend,
-    prover_adapter_mode: getGroth16AdapterMode(),
-    devnet_mint_proof_mode: getDevnetMintProofMode(),
-    cache_backend: cache.getBackendName(),
-    solvus_program_id: config.solvusProgramId || null,
-    groth16_verifier_program_id: config.groth16VerifierProgramId || null,
-    oracle_price_feed_id: config.oraclePriceFeedId || null,
-    devnet_mint: getDevnetMintContext(config),
-    compliance_api_key_configured: COMPLIANCE_API_KEY.length > 0,
+  const { walletPath: _walletPath, ...devnetMintContext } = getDevnetMintContext(config);
+  const artifactPath = resolveConfiguredArtifactPath();
+  void buildDemoContextPayload().then((demoContext) => {
+    res.json({
+      status: 'ok',
+      timestamp: Math.floor(Date.now() / 1000),
+      prover_backend: config.proverBackend,
+      prover_adapter_mode: getGroth16AdapterMode(),
+      devnet_mint_proof_mode: getDevnetMintProofMode(),
+      artifact_demo_mode: Boolean(artifactPath),
+      cache_backend: cache.getBackendName(),
+      solvus_program_id: config.solvusProgramId || null,
+      groth16_verifier_program_id: config.groth16VerifierProgramId || null,
+      oracle_price_feed_id: config.oraclePriceFeedId || null,
+      devnet_mint: {
+        ...devnetMintContext,
+        wallet_configured: Boolean(config.solanaWalletPath),
+      },
+      demo_artifact_path: artifactPath ? path.relative(workspaceRoot, artifactPath) : null,
+      demo_context: demoContext,
+      compliance_api_key_configured: COMPLIANCE_API_KEY.length > 0,
+    });
+  }).catch(() => {
+    res.json({
+      status: 'ok',
+      timestamp: Math.floor(Date.now() / 1000),
+      prover_backend: config.proverBackend,
+      prover_adapter_mode: getGroth16AdapterMode(),
+      devnet_mint_proof_mode: getDevnetMintProofMode(),
+      artifact_demo_mode: Boolean(artifactPath),
+      cache_backend: cache.getBackendName(),
+      solvus_program_id: config.solvusProgramId || null,
+      groth16_verifier_program_id: config.groth16VerifierProgramId || null,
+      oracle_price_feed_id: config.oraclePriceFeedId || null,
+      devnet_mint: {
+        ...devnetMintContext,
+        wallet_configured: Boolean(config.solanaWalletPath),
+      },
+      demo_artifact_path: artifactPath ? path.relative(workspaceRoot, artifactPath) : null,
+      demo_context: null,
+      compliance_api_key_configured: COMPLIANCE_API_KEY.length > 0,
+    });
   });
 });
 
@@ -692,16 +798,17 @@ app.post('/compliance/warm-oracle', requireApiKey, async (_req, res) => {
 
 app.post('/compliance/warm-proof', requireApiKey, async (req, res) => {
   try {
-    const requestedAddress = req.body?.solana_address;
-    const requestedNullifierSecret = req.body?.nullifier_secret;
-    const fixture = await createDynamicDevMintFixture({
-      solana_address: typeof requestedAddress === 'string' && requestedAddress.length > 0
-        ? requestedAddress as Hex
-        : DEV_SOLANA_ADDRESS,
-      nullifier_secret: typeof requestedNullifierSecret === 'string' && requestedNullifierSecret.length > 0
-        ? requestedNullifierSecret as Hex
-        : undefined,
-    });
+    const artifactPath = resolveConfiguredArtifactPath();
+    const fixture = artifactPath
+      ? { prover_inputs: await resolveDemoMintProverInputs(undefined) }
+      : await createDynamicDevMintFixture({
+          solana_address: typeof req.body?.solana_address === 'string' && req.body.solana_address.length > 0
+            ? req.body.solana_address as Hex
+            : DEV_SOLANA_ADDRESS,
+          nullifier_secret: typeof req.body?.nullifier_secret === 'string' && req.body.nullifier_secret.length > 0
+            ? req.body.nullifier_secret as Hex
+            : undefined,
+        });
     const bundle = await generateDevnetMintProofBundle(fixture.prover_inputs);
     const auditRecord = await appendAuditRecord({
       event_type: 'PROOF_WARMED',
@@ -716,6 +823,7 @@ app.post('/compliance/warm-proof', requireApiKey, async (req, res) => {
       success: true,
       nullifier_hash: fixture.prover_inputs.nullifier_hash,
       prover_adapter_mode: getGroth16AdapterMode(),
+      artifact_demo_mode: Boolean(artifactPath),
       proof_bytes: (bundle.proof.length - 2) / 2,
       public_inputs_bytes: (bundle.public_inputs.length - 2) / 2,
       audit_record_id: auditRecord.record_id,
@@ -938,15 +1046,19 @@ app.post('/prove', async (req, res) => {
   req.setTimeout(45000);  // ADR-004: 45s < Solana tx timeout (~40s)
 
   try {
-    const proverInputs = req.body?.prover_inputs as ProverInputs | undefined;
-    if (!proverInputs) {
+    const artifactDemoMode = Boolean(resolveConfiguredArtifactPath());
+    const proverInputs = artifactDemoMode
+      ? await resolveDemoMintProverInputs(undefined)
+      : req.body?.prover_inputs as ProverInputs | undefined;
+    if (!proverInputs && !artifactDemoMode) {
       return res.status(400).json({ error: 'Missing prover_inputs' });
     }
+    const resolvedProverInputs = proverInputs as ProverInputs;
 
-    assertValidProverInputs(proverInputs);
+    assertValidProverInputs(resolvedProverInputs);
 
     const idempotencyKey =
-      (req.header('X-Idempotency-Key') || stableJsonHash(proverInputs)).toLowerCase();
+      (req.header('X-Idempotency-Key') || stableJsonHash(resolvedProverInputs)).toLowerCase();
     
     // Check Redis cache for idempotency
     const cached = await cache.get(`idempotency:${idempotencyKey}`);
@@ -963,7 +1075,7 @@ app.post('/prove', async (req, res) => {
     }
 
     const startedAt = Date.now();
-    const bundle = await generateGroth16ProofBundle(proverInputs);
+    const bundle = await generateGroth16ProofBundle(resolvedProverInputs);
     const response: ProofResponse = {
       proof: bundle.proof,
       public_inputs: bundle.public_inputs,
@@ -995,13 +1107,10 @@ app.post('/mint-devnet', requireApiKey, async (req, res) => {
   req.setTimeout(45000);  // ADR-004: 45s < Solana tx timeout
 
   try {
-    const proverInputs = req.body?.prover_inputs as ProverInputs | undefined;
+    const proverInputs = await resolveDemoMintProverInputs(req.body?.prover_inputs as ProverInputs | undefined);
     const zkusdAmount = Number(req.body?.zkusd_amount ?? 1_000_000);
     const l1RefundTimelock = resolveL1RefundTimelock(req.body?.l1_refund_timelock);
     const minBtcPriceE8 = readOptionalPositiveInteger(req.body?.min_btc_price_e8, 'min_btc_price_e8');
-    if (!proverInputs) {
-      return res.status(400).json({ error: 'Missing prover_inputs' });
-    }
     if (!Number.isInteger(zkusdAmount) || zkusdAmount <= 0) {
       return res.status(400).json({ error: 'zkusd_amount must be a positive integer' });
     }
@@ -1059,6 +1168,12 @@ app.post('/prepare-devnet-mint', requireApiKey, async (req, res) => {
   req.setTimeout(45000);  // ADR-004: 45s < Solana tx timeout
 
   try {
+    if (resolveConfiguredArtifactPath()) {
+      return res.status(409).json({
+        error: 'Artifact demo mode does not support Phantom preparation',
+        message: 'Use the server-side demo mint path while SOLVUS_GROTH16_PROOF_PATH is configured.',
+      });
+    }
     const ownerPubkey = req.body?.owner_pubkey;
     const zkusdAmount = Number(req.body?.zkusd_amount ?? 1_000_000);
     const l1RefundTimelock = resolveL1RefundTimelock(req.body?.l1_refund_timelock);
@@ -1145,6 +1260,19 @@ function assertValidProverInputs(inputs: ProverInputs): void {
   if (inputs.btc_data <= 0) {
     throw new Error('btc_data must be greater than zero');
   }
+}
+
+if (existsSync(frontendDistPath)) {
+  app.use(express.static(frontendDistPath));
+  app.use((req, res, next) => {
+    if (req.method !== 'GET') {
+      return next();
+    }
+    if (!(req.headers.accept || '').includes('text/html')) {
+      return next();
+    }
+    return res.sendFile(path.join(frontendDistPath, 'index.html'));
+  });
 }
 
 app.listen(PORT, () => {

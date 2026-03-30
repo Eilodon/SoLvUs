@@ -73,14 +73,18 @@ npm run solana:init:protocol-config
 # Generate deterministic sample inputs
 npm run sample:prover-inputs
 
+# Export a random compliance key for this shell session
+export COMPLIANCE_API_KEY="$(openssl rand -hex 24)"
+
 # Warm prover/oracle before a live demo
-COMPLIANCE_API_KEY=solvus-devnet-compliance-key npm run demo:preflight
+npm run demo:preflight
 
 # Run proof-only warm-up if you only need cache/oracle prep
 PROVER_SERVER_URL=http://127.0.0.1:3901 \
-COMPLIANCE_API_KEY=solvus-devnet-compliance-key \
 npm run stablehacks:smoke -- --phase=proof-only
 
 # Run the full StableHacks institutional smoke rehearsal
 PROVER_SERVER_URL=http://127.0.0.1:3901 npm run stablehacks:smoke
 ```
+
+Do not bake `COMPLIANCE_API_KEY` into `VITE_*` frontend variables. The frontend now expects operators to paste the session key into the UI at runtime.
